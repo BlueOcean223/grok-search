@@ -1,0 +1,205 @@
+# grok-search
+
+[English](README.md) | **简体中文**
+
+`grok-search` 是一个通用的 AI agent skill / 脚本包，用零依赖 Node.js 脚本提供三类网络访问能力：
+
+- **Search**：调用 Grok / OpenRouter / OpenAI 兼容接口进行联网搜索，并提取信源。
+- **Fetch**：抓取指定 URL 的可读内容，优先使用 Tavily / Firecrawl，最后 fallback 到无 key 的 Direct Fetch。
+- **Map**：发现站点内的候选页面 URL，优先使用 Tavily Map，最后 fallback 到轻量 Direct Map。
+
+## 为什么是 Skill + scripts
+
+- 不把搜索工具常驻塞进模型工具列表。
+- 不依赖 MCP 会话状态，例如 `get_sources`。
+- 不需要安装运行时依赖，Node.js 18+ 即可运行。
+- 每个脚本都稳定输出 JSON，便于 agent 解析。
+- 同一套 `SKILL.md` + `scripts/` 可以用于 pi，也可以被其他支持 skill/shell 的 agent harness 复用。
+
+## 要求
+
+- Node.js `>=18`
+- 不需要 `npm install`
+- `search.js` 需要配置 `GROK_API_URL` 和 `GROK_API_KEY`
+
+## 快速开始
+
+脚本假设从项目根目录运行：
+
+```bash
+node scripts/search.js "latest Node.js LTS"
+node scripts/fetch.js https://example.com
+node scripts/map.js https://docs.example.com --limit 20
+```
+
+## 在 pi 中使用（示例）
+
+把本目录 clone 或复制到你的 pi skills 位置，然后通过 `SKILL.md` 启用这个 skill。
+
+示例命令仍然是直接运行脚本：
+
+```bash
+node scripts/search.js "latest Node.js LTS"
+node scripts/fetch.js https://example.com
+node scripts/map.js https://docs.example.com --limit 20
+```
+
+其他 agent harness 也可以采用同样方式：读取 `SKILL.md`，再按需运行 `scripts/search.js`、`scripts/fetch.js`、`scripts/map.js`。
+
+## 配置
+
+推荐把长期使用的 key 放到：
+
+```text
+~/.config/grok-search/config.json
+```
+
+可以从示例文件复制：
+
+```bash
+mkdir -p ~/.config/grok-search
+cp config.example.json ~/.config/grok-search/config.json
+chmod 600 ~/.config/grok-search/config.json
+```
+
+然后编辑复制过去的文件，填入真实 key。环境变量仍然优先于配置文件，适合临时覆盖或 CI 使用。
+
+本项目**不会自动加载 `.env` 文件**。如果你想用环境变量，请自己在 shell 里 export。
+
+| 环境变量 | 配置文件 key | 是否必需 | 用途 | 说明 |
+| --- | --- | --- | --- | --- |
+| `GROK_API_URL` | `apiUrl` | search 必需 | `search.js` | 支持 `/chat/completions` 的 OpenAI 兼容 base URL。 |
+| `GROK_API_KEY` | `apiKey` | search 必需 | `search.js` | `GROK_API_URL` 对应的 API key。 |
+| `GROK_MODEL` | `model` | 否 | `search.js` | 默认 `grok-4-fast`。 |
+| `TAVILY_API_KEY` | `tavilyApiKey` | 否 | `search.js --extra`、`fetch.js`、`map.js` | 启用 Tavily Search/Extract/Map。没有它时，`fetch.js` 和 `map.js` 会走 direct fallback。 |
+| `TAVILY_API_URL` | `tavilyApiUrl` | 否 | Tavily 路径 | 默认 `https://api.tavily.com`。 |
+| `FIRECRAWL_API_KEY` | `firecrawlApiKey` | 否 | `fetch.js`、`search.js --extra` | 启用 Firecrawl Scrape fallback 和额外搜索信源。 |
+| `FIRECRAWL_API_URL` | `firecrawlApiUrl` | 否 | Firecrawl 路径 | 默认 `https://api.firecrawl.dev/v2`。 |
+| `GROK_OUTPUT_DIR` | `outputDir` | 否 | 所有脚本 | 覆盖长输出落盘目录。默认 `~/.cache/grok-search/outputs/`。 |
+| `GROK_DEBUG` | — | 否 | 所有脚本 | 仅环境变量。设为 `true` 时把重试/清理调试日志写到 stderr。 |
+
+如果 `GROK_API_URL` 包含 `openrouter`，模型名会自动追加 `:online`，除非模型名已经有这个后缀。
+
+## Search
+
+```bash
+node scripts/search.js "What changed in the latest Node.js LTS?"
+node scripts/search.js --platform GitHub "pi coding agent search skill"
+node scripts/search.js --extra 5 "latest pi coding agent docs"
+node scripts/search.js --model grok-4-fast --max-chars 50000 "query"
+```
+
+`search.js` 会以 `stream:false` 调用 `{GROK_API_URL}/chat/completions`，注入本地时间上下文，并返回：
+
+- `answer`
+- `sources`
+- `sources_count`
+- `warnings`
+- 使用 `--extra` 时返回 `extra_tried`
+- 回答过长时返回截断相关字段
+
+Extra sources 是补充信源。它们会加入 `sources`，但不会改写 Grok 的回答。
+
+## Fetch
+
+```bash
+node scripts/fetch.js https://example.com
+node scripts/fetch.js --provider direct https://example.com
+node scripts/fetch.js --max-chars 50000 https://example.com
+```
+
+`--provider auto` 的 provider 顺序：
+
+```text
+Tavily Extract -> Firecrawl Scrape -> Direct Fetch
+```
+
+Direct Fetch 是普通 HTTP(S) 文本页面的 best-effort fallback。它会做简单 HTML 清理、尽量格式化 JSON、记录重定向，并拒绝二进制/附件/超大响应。
+
+## Map
+
+```bash
+node scripts/map.js https://docs.example.com --limit 20
+node scripts/map.js --provider direct https://docs.example.com
+node scripts/map.js https://docs.example.com --instructions "only API reference pages" --max-depth 2
+```
+
+`--provider auto` 的 provider 顺序：
+
+```text
+Tavily Map -> Direct Map
+```
+
+没有 `TAVILY_API_KEY` 时，Tavily Map 不可用，`map.js` 会 fallback 到 Direct Map。Direct Map 只检查同站点 `/sitemap.xml`，然后提取首页同域名链接。它会忽略 `--instructions`，且只支持 `--max-depth 1`。
+
+## 输出文件
+
+所有脚本都会保证 stdout 是完整 JSON。长文本字段会以 preview 形式返回，完整内容写入：
+
+```text
+~/.cache/grok-search/outputs/
+```
+
+设置 `GROK_OUTPUT_DIR` 可以覆盖该路径。每次运行都会 best-effort 清理输出目录中超过 30 天的 `grok-search-*` 文件。
+
+如果 JSON 里出现 `full_output_path`，需要完整文本时读取这个文件即可。
+
+## Smoke Tests
+
+不需要 key：
+
+```bash
+node scripts/fetch.js --provider direct https://example.com
+node scripts/map.js --provider direct https://example.com --limit 5
+node tests/sources.test.js
+node tests/argv.test.js
+```
+
+搜索需要 Grok 配置：
+
+```bash
+export GROK_API_URL="https://your-openai-compatible-endpoint/v1"
+export GROK_API_KEY="your-key"
+node scripts/search.js "What changed in the latest Node.js LTS?"
+```
+
+## 常见错误
+
+- `GROK_API_URL 未配置`：使用 `search.js` 前需要设置 `GROK_API_URL`。
+- `GROK_API_KEY 未配置`：使用 `search.js` 前需要设置 `GROK_API_KEY`。
+- `TAVILY_API_KEY 未配置`：显式请求了 `--provider tavily`，但没有配置 Tavily key。
+- Direct Fetch 返回二进制/附件错误：目标 URL 不是文本页面，或对 direct fallback 来说太大。
+- Direct Map 返回很少或 0 个 URL：站点可能依赖 JavaScript、隐藏链接，或没有公开 sitemap。
+
+## 范围
+
+首版范围包括：
+
+- `search.js`
+- `search.js --extra N`
+- 带 Direct Fetch fallback 的 `fetch.js`
+- 带 Direct Map fallback 的 `map.js`
+- 长输出 preview 和完整输出文件
+- `SKILL.md`
+- `references/planning.md`
+- smoke/fixture tests
+
+不在范围内：
+
+- 浏览器渲染
+- PDF/图片/压缩包解析
+- Cookie、登录、代理或反爬绕过
+- MCP 会话状态，例如 `get_sources`
+- CLI 打包或 build 流程
+
+## 致谢与来源
+
+本项目参考并改造自 [GuDaStudio/GrokSearch](https://github.com/GuDaStudio/GrokSearch/)：一个基于 Python / MCP 的 Grok Search server。
+
+感谢 GuDaStudio 提供原始项目与思路。本项目在保留核心搜索/抓取/站点映射能力的基础上，重写为更适合 agent skill 分发的 **纯 JS、零依赖、脚本直跑** 形态。
+
+## 协议
+
+本项目使用 MIT 协议发布，详见 [LICENSE](LICENSE)。
+
+原项目同样使用 MIT 协议。我们在 `LICENSE` 中保留了原项目版权声明，以遵守 MIT 协议要求。

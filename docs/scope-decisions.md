@@ -49,7 +49,7 @@ Not included.
 
 Reason:
 
-- The project is distributed as a pi skill with scripts.
+- The project is distributed as a general skill/script bundle; pi is one integration example.
 - There is no `bin`, build step, or package manager requirement.
 
 ### Browser Rendering, Login, Cookies, Proxy, PDF Parsing

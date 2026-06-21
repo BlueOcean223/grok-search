@@ -1,15 +1,20 @@
 # grok-search
 
-`grok-search` is a pi skill built from zero-dependency Node scripts for web search, URL fetch, and lightweight site mapping.
+**English** | [简体中文](README.zh-CN.md)
 
-It is not an MCP server, extension, or packaged CLI. The intended use is for an agent to load `SKILL.md` only when web access is needed, then run the scripts directly with `node`.
+`grok-search` is a general-purpose AI agent skill / script bundle that provides three web access capabilities through zero-dependency Node.js scripts:
 
-## Why Scripts Instead Of MCP
+- **Search**: call Grok / OpenRouter / OpenAI-compatible APIs for web search and source extraction.
+- **Fetch**: fetch readable content from a concrete URL, preferring Tavily / Firecrawl and falling back to keyless Direct Fetch.
+- **Map**: discover candidate URLs on a website, preferring Tavily Map and falling back to lightweight Direct Map.
 
-- Keeps search tools out of the always-on tool list.
+## Why Skill + Scripts
+
+- Keeps search tools out of the always-on model tool list.
 - Avoids MCP session state such as `get_sources`.
-- Runs with plain Node.js and no install step.
-- Returns machine-readable JSON from every script.
+- Requires no runtime dependency installation; Node.js 18+ is enough.
+- Every script returns stable JSON for agent parsing.
+- The same `SKILL.md` + `scripts/` layout can be used by pi and by other agent harnesses that support skills or shell commands.
 
 ## Requirements
 
@@ -17,9 +22,7 @@ It is not an MCP server, extension, or packaged CLI. The intended use is for an 
 - No `npm install` required
 - `GROK_API_URL` and `GROK_API_KEY` for `search.js`
 
-## Install As A pi Skill
-
-Clone or copy this directory into your pi skills location, then enable the skill by referencing `SKILL.md`.
+## Quick Start
 
 The scripts assume they are run from the project root:
 
@@ -29,35 +32,53 @@ node scripts/fetch.js https://example.com
 node scripts/map.js https://docs.example.com --limit 20
 ```
 
+## Use With pi (Example)
+
+Clone or copy this directory into your pi skills location, then enable the skill through `SKILL.md`.
+
+The commands are still direct script invocations:
+
+```bash
+node scripts/search.js "latest Node.js LTS"
+node scripts/fetch.js https://example.com
+node scripts/map.js https://docs.example.com --limit 20
+```
+
+Other agent harnesses can use the same pattern: read `SKILL.md`, then run `scripts/search.js`, `scripts/fetch.js`, or `scripts/map.js` when needed.
+
 ## Configuration
 
-Environment variables take priority over `~/.config/grok-search/config.json`.
+Recommended: keep long-lived keys in:
 
-| Variable | Required | Used by | Notes |
-| --- | --- | --- | --- |
-| `GROK_API_URL` | Yes for search | `search.js` | OpenAI-compatible base URL that supports `/chat/completions`. |
-| `GROK_API_KEY` | Yes for search | `search.js` | API key for `GROK_API_URL`. |
-| `GROK_MODEL` | No | `search.js` | Defaults to `grok-4-fast`. |
-| `TAVILY_API_KEY` | No | `search.js --extra`, `fetch.js`, `map.js` | Enables Tavily Search/Extract/Map. Without it, `fetch.js` and `map.js` use direct fallbacks. |
-| `TAVILY_API_URL` | No | Tavily paths | Defaults to `https://api.tavily.com`. |
-| `FIRECRAWL_API_KEY` | No | `fetch.js`, `search.js --extra` | Enables Firecrawl Scrape fallback and extra search sources. |
-| `FIRECRAWL_API_URL` | No | Firecrawl paths | Defaults to `https://api.firecrawl.dev/v2`. |
-| `GROK_OUTPUT_DIR` | No | all scripts | Overrides long-output storage. Default: `~/.cache/grok-search/outputs/`. |
-| `GROK_DEBUG` | No | all scripts | `true` prints retry/cleanup debug logs to stderr. |
+```text
+~/.config/grok-search/config.json
+```
+
+Copy the example config first:
+
+```bash
+mkdir -p ~/.config/grok-search
+cp config.example.json ~/.config/grok-search/config.json
+chmod 600 ~/.config/grok-search/config.json
+```
+
+Then edit the copied file with your real keys. Environment variables still take priority over the config file, which is useful for one-off overrides and CI.
+
+This project does **not** auto-load `.env` files. If you prefer env vars, export them in your shell yourself.
+
+| Environment variable | Config key | Required | Used by | Notes |
+| --- | --- | --- | --- | --- |
+| `GROK_API_URL` | `apiUrl` | Yes for search | `search.js` | OpenAI-compatible base URL that supports `/chat/completions`. |
+| `GROK_API_KEY` | `apiKey` | Yes for search | `search.js` | API key for `GROK_API_URL`. |
+| `GROK_MODEL` | `model` | No | `search.js` | Defaults to `grok-4-fast`. |
+| `TAVILY_API_KEY` | `tavilyApiKey` | No | `search.js --extra`, `fetch.js`, `map.js` | Enables Tavily Search/Extract/Map. Without it, `fetch.js` and `map.js` use direct fallbacks. |
+| `TAVILY_API_URL` | `tavilyApiUrl` | No | Tavily paths | Defaults to `https://api.tavily.com`. |
+| `FIRECRAWL_API_KEY` | `firecrawlApiKey` | No | `fetch.js`, `search.js --extra` | Enables Firecrawl Scrape fallback and extra search sources. |
+| `FIRECRAWL_API_URL` | `firecrawlApiUrl` | No | Firecrawl paths | Defaults to `https://api.firecrawl.dev/v2`. |
+| `GROK_OUTPUT_DIR` | `outputDir` | No | all scripts | Overrides long-output storage. Default: `~/.cache/grok-search/outputs/`. |
+| `GROK_DEBUG` | — | No | all scripts | Env only. `true` prints retry/cleanup debug logs to stderr. |
 
 If `GROK_API_URL` contains `openrouter`, the model automatically gets `:online` unless it already has that suffix.
-
-Example config file:
-
-```json
-{
-  "apiUrl": "https://your-openai-compatible-endpoint/v1",
-  "apiKey": "your-grok-key",
-  "model": "grok-4-fast",
-  "tavilyApiKey": "tvly-your-key",
-  "firecrawlApiKey": "fc-your-key"
-}
-```
 
 ## Search
 
@@ -130,7 +151,8 @@ No key required:
 ```bash
 node scripts/fetch.js --provider direct https://example.com
 node scripts/map.js --provider direct https://example.com --limit 5
-node scripts/test-sources.js
+node tests/sources.test.js
+node tests/argv.test.js
 ```
 
 Search requires Grok configuration:
@@ -169,3 +191,15 @@ Out of scope:
 - Cookies, login, proxy, or anti-bot bypass
 - MCP server state such as `get_sources`
 - CLI packaging or build steps
+
+## Acknowledgements And Origin
+
+This project is based on and adapted from [GuDaStudio/GrokSearch](https://github.com/GuDaStudio/GrokSearch/), a Python / MCP Grok Search server.
+
+Thanks to GuDaStudio for the original project and design. This project keeps the core search/fetch/site-map ideas, then rewrites them as **plain JS, zero-dependency, directly runnable scripts** for agent skill distribution.
+
+## License
+
+This project is released under the MIT License. See [LICENSE](LICENSE).
+
+The original project is also MIT-licensed. The original copyright notice is preserved in `LICENSE` to comply with the MIT License.
