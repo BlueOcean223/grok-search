@@ -11,10 +11,6 @@ function trimBody(text, max = 500) {
   return text.length > max ? `${text.slice(0, max)}…` : text;
 }
 
-function trimTrailingUrlPunctuation(value) {
-  return value.replace(/[.,;:!?，。、；：！？》）】)]+$/g, "");
-}
-
 export function retryAfterMs(headers) {
   const value = headers.get("retry-after");
   if (!value) return null;
@@ -474,18 +470,4 @@ export async function fetchUrl(url, config, { provider = "auto" } = {}) {
   }
 
   return { ok: false, provider, tried, error: `未知 provider: ${provider}` };
-}
-
-export function normalizeSourceUrl(url) {
-  try {
-    const parsed = new URL(trimTrailingUrlPunctuation(url));
-    parsed.hash = "";
-    parsed.hostname = parsed.hostname.toLowerCase();
-    if (parsed.pathname !== "/" && parsed.pathname.endsWith("/")) {
-      parsed.pathname = parsed.pathname.replace(/\/+$/g, "");
-    }
-    return parsed.toString();
-  } catch {
-    return String(url || "").trim();
-  }
 }

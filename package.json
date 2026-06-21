@@ -9,6 +9,7 @@
     "node": ">=18"
   },
   "scripts": {
-    "fetch": "node scripts/fetch.js"
+    "fetch": "node scripts/fetch.js",
+    "test:sources": "node scripts/test-sources.js"
   }
 }
