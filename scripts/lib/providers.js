@@ -172,6 +172,85 @@ export async function firecrawlScrape(url, config) {
   return { ok: false, provider: "firecrawl", error: lastError };
 }
 
+function sourceFromTavily(result) {
+  const url = typeof result?.url === "string" ? result.url.trim() : "";
+  if (!url) return null;
+  return {
+    url,
+    provider: "tavily",
+    ...(result.title ? { title: String(result.title).trim() } : {}),
+    ...(result.content ? { description: String(result.content).trim() } : {}),
+    ...(result.published_date ? { published_date: String(result.published_date).trim() } : {}),
+    ...(Number.isFinite(result.score) ? { score: result.score } : {}),
+  };
+}
+
+function sourceFromFirecrawl(result) {
+  const url = typeof result?.url === "string" ? result.url.trim() : "";
+  if (!url) return null;
+  return {
+    url,
+    provider: "firecrawl",
+    ...(result.title ? { title: String(result.title).trim() } : {}),
+    ...(result.description ? { description: String(result.description).trim() } : {}),
+  };
+}
+
+export async function tavilySearch(query, limit, config) {
+  if (!config.tavilyApiKey) {
+    return { ok: false, provider: "tavily", skipped: true, error: "TAVILY_API_KEY 未配置", sources: [] };
+  }
+
+  const endpoint = `${config.tavilyApiUrl.replace(/\/+$/, "")}/search`;
+  try {
+    const data = await requestJson(endpoint, {
+      headers: authHeaders(config.tavilyApiKey),
+      body: {
+        query,
+        max_results: limit,
+        search_depth: "advanced",
+        include_raw_content: false,
+        include_answer: false,
+      },
+      timeoutMs: 90_000,
+      config,
+      retry: true,
+    });
+    const sources = (Array.isArray(data?.results) ? data.results : []).map(sourceFromTavily).filter(Boolean);
+    return { ok: true, provider: "tavily", sources, raw: data };
+  } catch (error) {
+    return { ok: false, provider: "tavily", error: error.message, sources: [] };
+  }
+}
+
+export async function firecrawlSearch(query, limit, config) {
+  if (!config.firecrawlApiKey) {
+    return { ok: false, provider: "firecrawl", skipped: true, error: "FIRECRAWL_API_KEY 未配置", sources: [] };
+  }
+
+  const endpoint = `${config.firecrawlApiUrl.replace(/\/+$/, "")}/search`;
+  try {
+    const data = await requestJson(endpoint, {
+      headers: authHeaders(config.firecrawlApiKey),
+      body: { query, limit },
+      timeoutMs: 90_000,
+      config,
+      retry: true,
+    });
+    const rawResults = Array.isArray(data?.data?.web)
+      ? data.data.web
+      : Array.isArray(data?.data)
+        ? data.data
+        : Array.isArray(data?.web)
+          ? data.web
+          : [];
+    const sources = rawResults.map(sourceFromFirecrawl).filter(Boolean);
+    return { ok: true, provider: "firecrawl", sources, raw: data };
+  } catch (error) {
+    return { ok: false, provider: "firecrawl", error: error.message, sources: [] };
+  }
+}
+
 function headerNumber(headers, name) {
   const value = headers.get(name);
   if (!value) return null;

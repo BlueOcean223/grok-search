@@ -10,6 +10,7 @@
   },
   "scripts": {
     "fetch": "node scripts/fetch.js",
+    "search": "node scripts/search.js",
     "test:sources": "node scripts/test-sources.js"
   }
 }
