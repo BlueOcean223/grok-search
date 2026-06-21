@@ -1,7 +1,7 @@
 {
   "name": "grok-search",
   "version": "0.1.0",
-  "description": "pi skill scripts for Grok Search web search/fetch/map",
+  "description": "Agent skill scripts for Grok-powered web search, fetch, and site mapping",
   "type": "module",
   "private": true,
   "license": "MIT",
@@ -12,8 +12,8 @@
     "fetch": "node scripts/fetch.js",
     "map": "node scripts/map.js",
     "search": "node scripts/search.js",
-    "test": "node scripts/test-sources.js && node scripts/test-argv.js",
-    "test:argv": "node scripts/test-argv.js",
-    "test:sources": "node scripts/test-sources.js"
+    "test": "node tests/sources.test.js && node tests/argv.test.js",
+    "test:argv": "node tests/argv.test.js",
+    "test:sources": "node tests/sources.test.js"
   }
 }

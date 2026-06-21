@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
-import { extractUniqueUrls, mergeSources, splitAnswerAndSources } from "./lib/sources.js";
+import { extractUniqueUrls, mergeSources, splitAnswerAndSources } from "../scripts/lib/sources.js";
 
 const fixtures = [
   {

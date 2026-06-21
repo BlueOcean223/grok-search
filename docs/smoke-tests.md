@@ -5,8 +5,8 @@ These checks are manual because real provider calls require private API keys.
 ## No Key
 
 ```bash
-node scripts/test-sources.js
-node scripts/test-argv.js
+node tests/sources.test.js
+node tests/argv.test.js
 node scripts/fetch.js --provider direct https://example.com
 node scripts/map.js --provider direct https://example.com --limit 5
 ```
