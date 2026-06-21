@@ -5,7 +5,7 @@ description: Use when the user explicitly asks to search the web, check latest/c
 
 # Grok Search
 
-Zero-dependency Node scripts for web search, URL fetch, and lightweight site mapping. Run the scripts directly — there is no MCP server or extension to call.
+Node scripts for web search, URL fetch, and lightweight site mapping. Run `npm install` once if dependencies are not installed, then run the scripts directly — there is no MCP server or extension to call.
 
 ## Choose The Script
 
@@ -20,21 +20,21 @@ Do not chain map → fetch → search by default. Run the fewest commands that a
 ## Commands
 
 ```bash
-node scripts/search.js "query"
-node scripts/search.js --platform GitHub --extra 5 "query"
-node scripts/search.js --model grok-4-fast --max-chars 50000 "query"
+./scripts/search.js "query"
+./scripts/search.js --platform GitHub --extra 5 "query"
+./scripts/search.js --model grok-4-fast --max-chars 50000 "query"
 ```
 
 ```bash
-node scripts/fetch.js https://example.com
-node scripts/fetch.js --provider direct https://example.com
-node scripts/fetch.js --max-chars 50000 https://example.com
+./scripts/fetch.js https://example.com
+./scripts/fetch.js --provider direct https://example.com
+./scripts/fetch.js --max-chars 50000 https://example.com
 ```
 
 ```bash
-node scripts/map.js https://docs.example.com --limit 20
-node scripts/map.js --provider direct https://docs.example.com
-node scripts/map.js https://docs.example.com --instructions "only API reference pages" --max-depth 2
+./scripts/map.js https://docs.example.com --limit 20
+./scripts/map.js --provider direct https://docs.example.com
+./scripts/map.js https://docs.example.com --instructions "only API reference pages" --max-depth 2
 ```
 
 Add `--extra N` to `search.js` only when the user wants more sources alongside Grok's answer. The Grok answer itself does not change — the extras are leads to verify, not citations Grok used.
@@ -55,6 +55,10 @@ Check in this order:
 `map.js` provider order for `--provider auto`: Tavily Map → Direct Map.
 
 Without `TAVILY_API_KEY` / `FIRECRAWL_API_KEY`, only the direct providers run. The direct providers do not execute JavaScript, log in, use cookies, parse PDFs, or bypass anti-bot. Direct Map only reads `/sitemap.xml` and same-domain homepage links, ignores `--instructions`, and is limited to `--max-depth 1`.
+
+## Proxy
+
+The scripts automatically use terminal proxy environment variables via undici when present: `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` and lowercase variants. `NO_PROXY` is honored, and loopback hosts are bypassed. Use `GROK_PROXY="http://127.0.0.1:7890"` to set a proxy just for this tool, or `GROK_PROXY=off` to force direct connections. If proxy debugging is needed, set `GROK_DEBUG=true`.
 
 If `search.js` returns `GROK_API_URL 未配置` or `GROK_API_KEY 未配置`, the project itself is missing required setup — point the user at `README.md` instead of trying to work around it.
 

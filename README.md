@@ -2,7 +2,7 @@
 
 **English** | [简体中文](README.zh-CN.md)
 
-`grok-search` is a general-purpose AI agent skill / script bundle that provides three web access capabilities through zero-dependency Node.js scripts:
+`grok-search` is a general-purpose AI agent skill / script bundle that provides three web access capabilities through small Node.js scripts:
 
 - **Search**: call Grok / OpenRouter / OpenAI-compatible APIs for web search and source extraction.
 - **Fetch**: fetch readable content from a concrete URL, preferring Tavily / Firecrawl and falling back to keyless Direct Fetch.
@@ -12,24 +12,25 @@
 
 - Keeps search tools out of the always-on model tool list.
 - Avoids MCP session state such as `get_sources`.
-- Requires no runtime dependency installation; Node.js 18+ is enough.
+- Uses one focused runtime dependency (`undici`) for proxy-aware HTTP transport.
 - Every script returns stable JSON for agent parsing.
 - The same `SKILL.md` + `scripts/` layout can be used by pi and by other agent harnesses that support skills or shell commands.
 
 ## Requirements
 
-- Node.js `>=18`
-- No `npm install` required
+- Node.js `>=18.17`
+- Run `npm install` once to install the `undici` transport dependency
 - `GROK_API_URL` and `GROK_API_KEY` for `search.js`
 
 ## Quick Start
 
-The scripts assume they are run from the project root:
+Install dependencies once, then run scripts from the project root:
 
 ```bash
-node scripts/search.js "latest Node.js LTS"
-node scripts/fetch.js https://example.com
-node scripts/map.js https://docs.example.com --limit 20
+npm install
+./scripts/search.js "latest Node.js LTS"
+./scripts/fetch.js https://example.com
+./scripts/map.js https://docs.example.com --limit 20
 ```
 
 ## Use With pi (Example)
@@ -39,9 +40,9 @@ Clone or copy this directory into your pi skills location, then enable the skill
 The commands are still direct script invocations:
 
 ```bash
-node scripts/search.js "latest Node.js LTS"
-node scripts/fetch.js https://example.com
-node scripts/map.js https://docs.example.com --limit 20
+./scripts/search.js "latest Node.js LTS"
+./scripts/fetch.js https://example.com
+./scripts/map.js https://docs.example.com --limit 20
 ```
 
 Other agent harnesses can use the same pattern: read `SKILL.md`, then run `scripts/search.js`, `scripts/fetch.js`, or `scripts/map.js` when needed.
@@ -66,6 +67,20 @@ Then edit the copied file with your real keys. Environment variables still take 
 
 This project does **not** auto-load `.env` files. If you prefer env vars, export them in your shell yourself.
 
+### Proxy
+
+Node's native `fetch` does not reliably honor terminal proxy variables by default. These scripts install an `undici` `EnvHttpProxyAgent` automatically when proxy environment variables are present, so outbound requests use your terminal proxy setup.
+
+Supported variables:
+
+- `HTTP_PROXY` / `http_proxy`
+- `HTTPS_PROXY` / `https_proxy`
+- `ALL_PROXY` / `all_proxy`
+- `NO_PROXY` / `no_proxy`
+- `GROK_PROXY` to explicitly set one proxy URL for this tool, or `GROK_PROXY=off` to force direct connections
+
+`NO_PROXY` is honored, and loopback hosts (`localhost`, `127.0.0.1`, `::1`) are always added to the bypass list.
+
 | Environment variable | Config key | Required | Used by | Notes |
 | --- | --- | --- | --- | --- |
 | `GROK_API_URL` | `apiUrl` | Yes for search | `search.js` | OpenAI-compatible base URL that supports `/chat/completions`. |
@@ -76,17 +91,18 @@ This project does **not** auto-load `.env` files. If you prefer env vars, export
 | `FIRECRAWL_API_KEY` | `firecrawlApiKey` | No | `fetch.js`, `search.js --extra` | Enables Firecrawl Scrape fallback and extra search sources. |
 | `FIRECRAWL_API_URL` | `firecrawlApiUrl` | No | Firecrawl paths | Defaults to `https://api.firecrawl.dev/v2`. |
 | `GROK_OUTPUT_DIR` | `outputDir` | No | all scripts | Overrides long-output storage. Default: `~/.cache/grok-search/outputs/`. |
-| `GROK_DEBUG` | — | No | all scripts | Env only. `true` prints retry/cleanup debug logs to stderr. |
+| `GROK_DEBUG` | — | No | all scripts | Env only. `true` prints retry/cleanup/proxy debug logs to stderr. |
+| `GROK_PROXY` | — | No | all scripts | Env only. Explicit proxy URL for this tool, or `off`/`direct` to disable proxy use. |
 
 If `GROK_API_URL` contains `openrouter`, the model automatically gets `:online` unless it already has that suffix.
 
 ## Search
 
 ```bash
-node scripts/search.js "What changed in the latest Node.js LTS?"
-node scripts/search.js --platform GitHub "pi coding agent search skill"
-node scripts/search.js --extra 5 "latest pi coding agent docs"
-node scripts/search.js --model grok-4-fast --max-chars 50000 "query"
+./scripts/search.js "What changed in the latest Node.js LTS?"
+./scripts/search.js --platform GitHub "pi coding agent search skill"
+./scripts/search.js --extra 5 "latest pi coding agent docs"
+./scripts/search.js --model grok-4-fast --max-chars 50000 "query"
 ```
 
 `search.js` calls `{GROK_API_URL}/chat/completions` with `stream:false`, injects local time context, and returns:
@@ -103,9 +119,9 @@ Extra sources are supplemental. They are added to `sources`, but they do not rew
 ## Fetch
 
 ```bash
-node scripts/fetch.js https://example.com
-node scripts/fetch.js --provider direct https://example.com
-node scripts/fetch.js --max-chars 50000 https://example.com
+./scripts/fetch.js https://example.com
+./scripts/fetch.js --provider direct https://example.com
+./scripts/fetch.js --max-chars 50000 https://example.com
 ```
 
 Provider order for `--provider auto`:
@@ -119,9 +135,9 @@ Direct Fetch is a best-effort fallback for normal HTTP(S) text pages. It strips 
 ## Map
 
 ```bash
-node scripts/map.js https://docs.example.com --limit 20
-node scripts/map.js --provider direct https://docs.example.com
-node scripts/map.js https://docs.example.com --instructions "only API reference pages" --max-depth 2
+./scripts/map.js https://docs.example.com --limit 20
+./scripts/map.js --provider direct https://docs.example.com
+./scripts/map.js https://docs.example.com --instructions "only API reference pages" --max-depth 2
 ```
 
 Provider order for `--provider auto`:
@@ -149,9 +165,10 @@ When JSON contains `full_output_path`, read that file if the full text is needed
 No key required:
 
 ```bash
-node scripts/fetch.js --provider direct https://example.com
-node scripts/map.js --provider direct https://example.com --limit 5
+./scripts/fetch.js --provider direct https://example.com
+./scripts/map.js --provider direct https://example.com --limit 5
 node tests/sources.test.js
+node tests/proxy.test.js
 node tests/argv.test.js
 ```
 
@@ -160,7 +177,7 @@ Search requires Grok configuration:
 ```bash
 export GROK_API_URL="https://your-openai-compatible-endpoint/v1"
 export GROK_API_KEY="your-key"
-node scripts/search.js "What changed in the latest Node.js LTS?"
+./scripts/search.js "What changed in the latest Node.js LTS?"
 ```
 
 ## Common Errors
@@ -188,7 +205,7 @@ Out of scope:
 
 - Browser rendering
 - PDF/image/archive parsing
-- Cookies, login, proxy, or anti-bot bypass
+- Cookies, login, or anti-bot bypass
 - MCP server state such as `get_sources`
 - CLI packaging or build steps
 
@@ -196,7 +213,7 @@ Out of scope:
 
 This project is based on and adapted from [GuDaStudio/GrokSearch](https://github.com/GuDaStudio/GrokSearch/), a Python / MCP Grok Search server.
 
-Thanks to GuDaStudio for the original project and design. This project keeps the core search/fetch/site-map ideas, then rewrites them as **plain JS, zero-dependency, directly runnable scripts** for agent skill distribution.
+Thanks to GuDaStudio for the original project and design. This project keeps the core search/fetch/site-map ideas, then rewrites them as **plain JS, directly runnable scripts** for agent skill distribution.
 
 ## License
 

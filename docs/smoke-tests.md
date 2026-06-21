@@ -6,10 +6,22 @@ These checks are manual because real provider calls require private API keys.
 
 ```bash
 node tests/sources.test.js
+node tests/proxy.test.js
 node tests/argv.test.js
-node scripts/fetch.js --provider direct https://example.com
-node scripts/map.js --provider direct https://example.com --limit 5
+./scripts/fetch.js --provider direct https://example.com
+./scripts/map.js --provider direct https://example.com --limit 5
 ```
+
+## Proxy Transport
+
+When `HTTP_PROXY` / `HTTPS_PROXY` is set, scripts should use the proxy without emitting undici warnings to stderr. The fetch check needs no key; the search check also requires Grok config.
+
+```bash
+HTTPS_PROXY=http://127.0.0.1:7890 ./scripts/fetch.js --provider direct https://example.com
+GROK_DEBUG=true HTTPS_PROXY=http://127.0.0.1:7890 ./scripts/search.js "proxy smoke test"
+```
+
+Use `GROK_PROXY=off` to force a direct connection for comparison.
 
 ## Grok Search
 
@@ -17,18 +29,18 @@ node scripts/map.js --provider direct https://example.com --limit 5
 export GROK_API_URL="https://your-openai-compatible-endpoint/v1"
 export GROK_API_KEY="your-key"
 export GROK_MODEL="grok-4-fast"
-node scripts/search.js "What changed in the latest Node.js LTS?"
-node scripts/search.js --platform GitHub "pi coding agent search skill"
+./scripts/search.js "What changed in the latest Node.js LTS?"
+./scripts/search.js --platform GitHub "pi coding agent search skill"
 ```
 
 ## Extra Sources
 
 ```bash
 export TAVILY_API_KEY="tvly-your-key"
-node scripts/search.js --extra 5 "latest pi coding agent docs"
+./scripts/search.js --extra 5 "latest pi coding agent docs"
 
 export FIRECRAWL_API_KEY="fc-your-key"
-node scripts/search.js --extra 5 "latest pi coding agent docs"
+./scripts/search.js --extra 5 "latest pi coding agent docs"
 ```
 
 `--extra` sources are supplemental references. They do not rewrite the Grok answer.
@@ -37,18 +49,18 @@ node scripts/search.js --extra 5 "latest pi coding agent docs"
 
 ```bash
 export TAVILY_API_KEY="tvly-your-key"
-node scripts/fetch.js https://example.com
+./scripts/fetch.js https://example.com
 
 export FIRECRAWL_API_KEY="fc-your-key"
-node scripts/fetch.js --provider firecrawl https://example.com
+./scripts/fetch.js --provider firecrawl https://example.com
 ```
 
 ## Map Providers
 
 ```bash
 export TAVILY_API_KEY="tvly-your-key"
-node scripts/map.js https://docs.example.com --limit 20
-node scripts/map.js https://docs.example.com --instructions "only API reference pages" --max-depth 2
+./scripts/map.js https://docs.example.com --limit 20
+./scripts/map.js https://docs.example.com --instructions "only API reference pages" --max-depth 2
 ```
 
 ## Expected Shape
