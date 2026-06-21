@@ -6,14 +6,17 @@
   "private": true,
   "license": "MIT",
   "engines": {
-    "node": ">=18"
+    "node": ">=18.17"
   },
   "scripts": {
     "fetch": "node scripts/fetch.js",
     "map": "node scripts/map.js",
     "search": "node scripts/search.js",
-    "test": "node tests/sources.test.js && node tests/argv.test.js",
+    "test": "node tests/sources.test.js && node tests/proxy.test.js && node tests/argv.test.js",
     "test:argv": "node tests/argv.test.js",
     "test:sources": "node tests/sources.test.js"
+  },
+  "dependencies": {
+    "undici": "^6.27.0"
   }
 }

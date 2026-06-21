@@ -1,3 +1,7 @@
+import { configureProxyFromEnv } from "./proxy.js";
+
+configureProxyFromEnv();
+
 const RETRYABLE_STATUS = new Set([408, 429, 500, 502, 503, 504]);
 const DIRECT_FETCH_MAX_BYTES = 2 * 1024 * 1024;
 const DIRECT_ERROR_PREVIEW_BYTES = 1000;
