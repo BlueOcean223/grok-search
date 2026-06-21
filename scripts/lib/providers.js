@@ -251,6 +251,236 @@ export async function firecrawlSearch(query, limit, config) {
   }
 }
 
+export async function tavilyMap(url, options, config) {
+  if (!config.tavilyApiKey) {
+    return { ok: false, provider: "tavily", skipped: true, error: "TAVILY_API_KEY 未配置", results: [] };
+  }
+
+  const endpoint = `${config.tavilyApiUrl.replace(/\/+$/, "")}/map`;
+  const body = {
+    url,
+    max_depth: options.maxDepth,
+    max_breadth: options.maxBreadth,
+    limit: options.limit,
+    timeout: options.timeout,
+  };
+  if (options.instructions) body.instructions = options.instructions;
+
+  try {
+    const data = await requestJson(endpoint, {
+      headers: authHeaders(config.tavilyApiKey),
+      body,
+      timeoutMs: (options.timeout + 10) * 1000,
+      config,
+      retry: true,
+    });
+    return {
+      ok: true,
+      provider: "tavily",
+      base_url: data?.base_url || new URL(url).origin,
+      results: Array.isArray(data?.results) ? data.results.filter((item) => typeof item === "string") : [],
+      response_time: data?.response_time ?? null,
+      raw: data,
+    };
+  } catch (error) {
+    return { ok: false, provider: "tavily", error: error.message, results: [] };
+  }
+}
+
+function withTimeout(timeoutMs) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  return {
+    signal: controller.signal,
+    clear: () => clearTimeout(timer),
+  };
+}
+
+async function fetchTextForMap(url, timeoutSeconds) {
+  const timeout = withTimeout(timeoutSeconds * 1000);
+  try {
+    const response = await fetch(url, {
+      redirect: "follow",
+      signal: timeout.signal,
+      headers: {
+        Accept: "application/xml,text/xml,text/html,*/*;q=0.8",
+        "User-Agent": "grok-search-skill/0.1",
+      },
+    });
+    const contentType = response.headers.get("content-type") || "";
+    if (!response.ok) {
+      return { ok: false, status: response.status, error: `HTTP ${response.status}: ${response.statusText || "请求失败"}` };
+    }
+    if (!isTextualContentType(contentType)) {
+      return { ok: false, status: response.status, error: "响应不是文本内容" };
+    }
+    const contentLength = headerNumber(response.headers, "content-length");
+    if (contentLength != null && contentLength > DIRECT_FETCH_MAX_BYTES) {
+      return { ok: false, status: response.status, error: `响应超过 Direct Map 首版上限 ${DIRECT_FETCH_MAX_BYTES} bytes` };
+    }
+    const body = await readTextWithLimit(response, DIRECT_FETCH_MAX_BYTES);
+    if (body.exceeded) {
+      return { ok: false, status: response.status, error: `响应超过 Direct Map 首版上限 ${DIRECT_FETCH_MAX_BYTES} bytes` };
+    }
+    return { ok: true, status: response.status, final_url: response.url || url, text: body.text, content_type: contentType };
+  } catch (error) {
+    const message = error.name === "AbortError" ? `请求超时（>${timeoutSeconds}s）` : error.message;
+    return { ok: false, error: message };
+  } finally {
+    timeout.clear();
+  }
+}
+
+function uniqueLimited(urls, limit) {
+  const seen = new Set();
+  const out = [];
+  for (const url of urls) {
+    if (!url || seen.has(url)) continue;
+    seen.add(url);
+    out.push(url);
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
+function parseSitemapUrls(xml, base, limit) {
+  const baseUrl = new URL(base);
+  const urls = [];
+  for (const match of String(xml || "").matchAll(/<loc>\s*([^<]+?)\s*<\/loc>/gi)) {
+    try {
+      const parsed = new URL(decodeHtmlEntities(match[1].trim()), baseUrl);
+      parsed.hash = "";
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") continue;
+      if (parsed.hostname !== baseUrl.hostname) continue;
+      urls.push(parsed.toString());
+    } catch {
+      // Ignore malformed sitemap entries.
+    }
+  }
+  return uniqueLimited(urls, limit);
+}
+
+function hrefValues(html) {
+  const values = [];
+  for (const match of String(html || "").matchAll(/<a\b[^>]*\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/gi)) {
+    values.push(match[1] || match[2] || match[3] || "");
+  }
+  return values;
+}
+
+function parseHtmlLinks(html, pageUrl, limit, maxBreadth) {
+  const baseUrl = new URL(pageUrl);
+  const urls = [];
+  for (const href of hrefValues(html)) {
+    try {
+      const parsed = new URL(decodeHtmlEntities(href.trim()), baseUrl);
+      parsed.hash = "";
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") continue;
+      if (parsed.hostname !== baseUrl.hostname) continue;
+      urls.push(parsed.toString());
+      if (urls.length >= maxBreadth) break;
+    } catch {
+      // Ignore malformed hrefs.
+    }
+  }
+  return uniqueLimited(urls, limit);
+}
+
+export async function directMap(url, options = {}) {
+  const warnings = [];
+  const parsed = new URL(url);
+  const baseUrl = parsed.origin;
+  const limit = options.limit || 50;
+  const maxBreadth = options.maxBreadth || 20;
+  const timeout = options.timeout || 150;
+  const instructionsIgnored = Boolean(options.instructions);
+
+  if (instructionsIgnored) {
+    warnings.push("Direct Map does not support instructions; ignored.");
+  }
+  if ((options.maxDepth || 1) > 1) {
+    warnings.push("Direct Map only supports max-depth 1; deeper traversal requires Tavily Map.");
+  }
+
+  const sitemapUrl = new URL("/sitemap.xml", baseUrl).toString();
+  const sitemap = await fetchTextForMap(sitemapUrl, timeout);
+  if (sitemap.ok) {
+    const results = parseSitemapUrls(sitemap.text, baseUrl, limit);
+    if (results.length) {
+      return {
+        ok: true,
+        provider: "direct",
+        base_url: baseUrl,
+        results,
+        response_time: null,
+        warnings,
+        instructions_ignored: instructionsIgnored,
+      };
+    }
+    warnings.push("Direct Map found sitemap.xml but no same-domain URLs were parsed.");
+  } else {
+    warnings.push(`Direct Map sitemap skipped: ${sitemap.error}`);
+  }
+
+  const homeUrl = new URL("/", baseUrl).toString();
+  const home = await fetchTextForMap(homeUrl, timeout);
+  if (!home.ok) {
+    return {
+      ok: false,
+      provider: "direct",
+      base_url: baseUrl,
+      results: [],
+      error: `Direct Map failed: ${home.error}`,
+      warnings,
+      instructions_ignored: instructionsIgnored,
+    };
+  }
+
+  const results = parseHtmlLinks(home.text, home.final_url || homeUrl, limit, maxBreadth);
+  return {
+    ok: true,
+    provider: "direct",
+    base_url: baseUrl,
+    results,
+    response_time: null,
+    warnings,
+    instructions_ignored: instructionsIgnored,
+  };
+}
+
+function summarizeMapFailure(tried, fallback) {
+  const details = tried
+    .filter((item) => item.error)
+    .map((item) => `${item.provider}: ${item.error}`)
+    .join("; ");
+  return details ? `映射失败: ${details}` : fallback || "映射失败";
+}
+
+export async function mapUrl(url, config, { provider = "auto", ...options } = {}) {
+  const tried = [];
+
+  if (provider === "direct") {
+    const result = await directMap(url, options);
+    tried.push({ provider: result.provider, ok: result.ok, skipped: false, error: result.error });
+    return { ...result, tried };
+  }
+
+  if (provider === "auto" || provider === "tavily") {
+    const result = await tavilyMap(url, options, config);
+    tried.push({ provider: result.provider, ok: result.ok, skipped: Boolean(result.skipped), error: result.error });
+    if (result.ok || provider === "tavily") return { ...result, tried };
+  }
+
+  if (provider === "auto") {
+    const result = await directMap(url, options);
+    tried.push({ provider: result.provider, ok: result.ok, skipped: false, error: result.error });
+    if (result.ok) return { ...result, tried };
+    return { ...result, tried, error: summarizeMapFailure(tried, result.error) };
+  }
+
+  return { ok: false, provider, results: [], tried, error: `未知 provider: ${provider}` };
+}
+
 function headerNumber(headers, name) {
   const value = headers.get(name);
   if (!value) return null;
