@@ -1,0 +1,14 @@
+{
+  "name": "grok-search",
+  "version": "0.1.0",
+  "description": "pi skill scripts for Grok Search web search/fetch/map",
+  "type": "module",
+  "private": true,
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "fetch": "node scripts/fetch.js"
+  }
+}
