@@ -8,7 +8,7 @@ import { mergeSources, splitAnswerAndSources } from "./lib/sources.js";
 const DEFAULT_MAX_CHARS = 30000;
 
 function usage() {
-  return `Usage: node scripts/search.js [--platform NAME] [--model MODEL] [--extra N] [--max-chars N] <query>
+  return `Usage: ./scripts/search.js [--platform NAME] [--model MODEL] [--extra N] [--max-chars N] <query>
 
 Run a Grok/OpenRouter web search and return JSON with answer and sources.
 

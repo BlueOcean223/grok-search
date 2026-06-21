@@ -6,7 +6,7 @@ import { fetchUrl } from "./lib/providers.js";
 const DEFAULT_MAX_CHARS = 30000;
 
 function usage() {
-  return `Usage: node scripts/fetch.js [--provider auto|tavily|firecrawl|direct] [--max-chars N] <url>
+  return `Usage: ./scripts/fetch.js [--provider auto|tavily|firecrawl|direct] [--max-chars N] <url>
 
 Fetch a web page as readable text/Markdown using Tavily Extract, Firecrawl Scrape, then Direct Fetch.
 

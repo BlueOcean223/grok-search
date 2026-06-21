@@ -13,7 +13,7 @@ const DEFAULTS = {
 };
 
 function usage() {
-  return `Usage: node scripts/map.js [--provider auto|tavily|direct] [--instructions TEXT] [--max-depth N] [--max-breadth N] [--limit N] [--timeout SECONDS] <url>
+  return `Usage: ./scripts/map.js [--provider auto|tavily|direct] [--instructions TEXT] [--max-depth N] [--max-breadth N] [--limit N] [--timeout SECONDS] <url>
 
 Discover same-site URLs with Tavily Map or a lightweight Direct Map fallback.
 
