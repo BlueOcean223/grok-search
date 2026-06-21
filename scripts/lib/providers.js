@@ -11,6 +11,15 @@ function trimBody(text, max = 500) {
   return text.length > max ? `${text.slice(0, max)}…` : text;
 }
 
+function redactSecrets(text, config) {
+  let out = String(text || "");
+  for (const secret of [config?.grokApiKey, config?.tavilyApiKey, config?.firecrawlApiKey]) {
+    if (typeof secret !== "string" || secret.length < 4) continue;
+    out = out.split(secret).join("***");
+  }
+  return out;
+}
+
 export function retryAfterMs(headers) {
   const value = headers.get("retry-after");
   if (!value) return null;
@@ -52,7 +61,7 @@ export async function requestJson(url, { headers, body, timeoutMs, config, retry
       clearTimeout(timer);
 
       if (!response.ok) {
-        const error = new Error(`HTTP ${response.status}: ${trimBody(text)}`);
+        const error = new Error(`HTTP ${response.status}: ${redactSecrets(trimBody(text), config)}`);
         error.status = response.status;
         error.retryAfterMs = retryAfterMs(response.headers);
         throw error;
@@ -61,7 +70,7 @@ export async function requestJson(url, { headers, body, timeoutMs, config, retry
       try {
         return text ? JSON.parse(text) : {};
       } catch (cause) {
-        const error = new Error(`响应不是有效 JSON: ${trimBody(text)}`);
+        const error = new Error(`响应不是有效 JSON: ${redactSecrets(trimBody(text), config)}`);
         error.cause = cause;
         throw error;
       }

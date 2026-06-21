@@ -12,6 +12,8 @@
     "fetch": "node scripts/fetch.js",
     "map": "node scripts/map.js",
     "search": "node scripts/search.js",
+    "test": "node scripts/test-sources.js && node scripts/test-argv.js",
+    "test:argv": "node scripts/test-argv.js",
     "test:sources": "node scripts/test-sources.js"
   }
 }
