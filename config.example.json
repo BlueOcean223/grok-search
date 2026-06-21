@@ -1,0 +1,10 @@
+{
+  "apiUrl": "https://your-openai-compatible-endpoint/v1",
+  "apiKey": "your-grok-api-key",
+  "model": "grok-4-fast",
+  "tavilyApiKey": "",
+  "tavilyApiUrl": "https://api.tavily.com",
+  "firecrawlApiKey": "",
+  "firecrawlApiUrl": "https://api.firecrawl.dev/v2",
+  "outputDir": ""
+}

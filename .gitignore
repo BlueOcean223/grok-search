@@ -25,7 +25,6 @@ logs/
 # --- 环境 / 密钥（grok / tavily / firecrawl API key 别进库）---
 .env
 .env.*
-!.env.example
 *.local
 
 # --- 缓存 ---
