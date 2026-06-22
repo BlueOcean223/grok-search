@@ -36,13 +36,6 @@ function parseJson(stdout) {
   return JSON.parse(stdout);
 }
 
-function assertLegacyErrorSchema(output, timestampField) {
-  assert.equal(output.ok, false);
-  assert.equal(typeof output.error, "string");
-  assert.equal(Array.isArray(output.warnings), true);
-  assert.equal(typeof output[timestampField], "string");
-}
-
 function assertCommandErrorSchema(output, timestampField, code) {
   assert.equal(typeof output.error.message, "string");
   assert.equal(output.error.code, code);
@@ -64,7 +57,7 @@ async function withServer(handler, callback) {
 let result = await runNode(["scripts/fetch.js", "--provider", "bad", "https://example.com"]);
 assert.equal(result.code, 2);
 assert.match(result.stderr, /--provider/);
-assertLegacyErrorSchema(parseJson(result.stdout), "fetched_at");
+assertCommandErrorSchema(parseJson(result.stdout), "fetched_at", "ARGUMENT_ERROR");
 
 result = await runNode(["scripts/search.js"], { GROK_API_KEY: "secret-search-key" });
 assert.equal(result.code, 2);
@@ -73,8 +66,8 @@ assert.equal(result.stderr.includes("secret-search-key"), false);
 assertCommandErrorSchema(parseJson(result.stdout), "searched_at", "ARGUMENT_ERROR");
 
 result = await runNode(["scripts/map.js", "ftp://example.com"]);
-assert.equal(result.code, 1);
-assertLegacyErrorSchema(parseJson(result.stdout), "mapped_at");
+assert.equal(result.code, 2);
+assertCommandErrorSchema(parseJson(result.stdout), "mapped_at", "ARGUMENT_ERROR");
 
 await withServer(
   (req, res) => {
@@ -86,10 +79,59 @@ await withServer(
     const fetchResult = await runNode(["scripts/fetch.js", "--provider", "direct", `http://127.0.0.1:${port}/page`]);
     assert.equal(fetchResult.code, 0);
     const output = parseJson(fetchResult.stdout);
-    assert.equal(output.ok, true);
-    assert.equal(output.provider, "direct");
-    assert.match(output.content, /Hello/);
+    assert.equal(Object.hasOwn(output, "ok"), false);
+    assert.equal(output.diagnostics.provider, "direct");
+    assert.equal(output.diagnostics.options.provider, "direct");
+    assert.equal(output.diagnostics.options.max_chars, 12000);
+    assert.match(output.content.text, /Hello/);
+    assert.equal(output.content.chars, output.content.text.length);
+    assert.equal(output.content.truncated, false);
+    assert.equal(output.content.full_path, null);
     assert.equal(fetchResult.stderr, "");
+  }
+);
+
+await withServer(
+  (req, res) => {
+    req.resume();
+    res.writeHead(200, { "content-type": "text/plain" });
+    res.end("z".repeat(13_000));
+  },
+  async (_server, port) => {
+    const defaultFetch = await runNode(["scripts/fetch.js", "--provider", "direct", `http://127.0.0.1:${port}/long`]);
+    assert.equal(defaultFetch.code, 0);
+    let output = parseJson(defaultFetch.stdout);
+    assert.equal(output.content.chars, 12_000);
+    assert.equal(output.content.original_chars, 13_000);
+    assert.equal(output.content.truncated, true);
+    assert.equal(typeof output.content.full_path, "string");
+    assert.equal((await readFile(output.content.full_path, "utf8")).length, 13_000);
+
+    const explicitFetch = await runNode(["scripts/fetch.js", "--provider", "direct", "--max-chars", "50000", `http://127.0.0.1:${port}/long`]);
+    assert.equal(explicitFetch.code, 0);
+    output = parseJson(explicitFetch.stdout);
+    assert.equal(output.content.chars, 13_000);
+    assert.equal(output.content.original_chars, 13_000);
+    assert.equal(output.content.truncated, false);
+    assert.equal(output.content.full_path, null);
+    assert.equal(output.diagnostics.options.max_chars, 50_000);
+  }
+);
+
+await withServer(
+  (req, res) => {
+    req.resume();
+    res.writeHead(500, { "content-type": "text/plain" });
+    res.end("fetch failure preview");
+  },
+  async (_server, port) => {
+    const fetchResult = await runNode(["scripts/fetch.js", "--provider", "direct", `http://127.0.0.1:${port}/fail`]);
+    assert.equal(fetchResult.code, 1);
+    const output = parseJson(fetchResult.stdout);
+    assert.equal(output.error.code, "FETCH_ERROR");
+    assert.match(output.error.preview, /fetch failure preview/);
+    assert.equal(output.diagnostics.provider, "direct");
+    assert.equal(output.diagnostics.provider_attempts.length, 1);
   }
 );
 
@@ -107,9 +149,31 @@ await withServer(
     const mapResult = await runNode(["scripts/map.js", "--provider", "direct", `http://127.0.0.1:${port}/`]);
     assert.equal(mapResult.code, 0);
     const output = parseJson(mapResult.stdout);
-    assert.equal(output.ok, true);
-    assert.deepEqual(output.results, [`http://127.0.0.1:${port}/a`]);
+    assert.equal(Object.hasOwn(output, "ok"), false);
+    assert.equal(Object.hasOwn(output, "results"), false);
+    assert.deepEqual(output.urls, [`http://127.0.0.1:${port}/a`]);
+    assert.equal(output.diagnostics.provider, "direct");
+    assert.deepEqual(output.diagnostics.provider_attempts, [{ provider: "direct", ok: true, skipped: false }]);
+    assert.deepEqual(output.diagnostics.warnings, []);
+    assert.equal(output.diagnostics.options.limit, 50);
     assert.equal(mapResult.stderr, "");
+  }
+);
+
+await withServer(
+  (req, res) => {
+    req.resume();
+    res.writeHead(500, { "content-type": "text/plain" });
+    res.end("map failure");
+  },
+  async (_server, port) => {
+    const mapResult = await runNode(["scripts/map.js", "--provider", "direct", `http://127.0.0.1:${port}/`]);
+    assert.equal(mapResult.code, 1);
+    const output = parseJson(mapResult.stdout);
+    assert.equal(output.error.code, "MAP_ERROR");
+    assert.equal(output.diagnostics.provider, "direct");
+    assert.equal(output.diagnostics.provider_attempts.length, 1);
+    assert.equal(Array.isArray(output.diagnostics.warnings), true);
   }
 );
 

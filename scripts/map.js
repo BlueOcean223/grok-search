@@ -111,21 +111,57 @@ function parseArgs(argv) {
 
 function publicResult(args, result) {
   const ok = Boolean(result.ok);
-  return {
-    ok,
-    url: args.url,
+  const mappedAt = new Date().toISOString();
+  const diagnostics = {
     provider: result.provider,
-    base_url: result.base_url || new URL(args.url).origin,
-    results: Array.isArray(result.results) ? result.results : [],
     response_time: result.response_time ?? null,
-    tried: result.tried || [],
-    warnings: result.warnings || [],
     instructions_ignored: Boolean(result.instructions_ignored),
-    error: ok ? undefined : result.error || "映射失败",
-    mapped_at: new Date().toISOString(),
+    warnings: result.warnings || [],
+    provider_attempts: result.tried || [],
+    options: {
+      provider: args.provider,
+      instructions: args.instructions,
+      max_depth: args.maxDepth,
+      max_breadth: args.maxBreadth,
+      limit: args.limit,
+      timeout: args.timeout,
+    },
+    mapped_at: mappedAt,
+  };
+
+  if (!ok) {
+    return {
+      error: {
+        message: result.error || "映射失败",
+        code: "MAP_ERROR",
+      },
+      diagnostics,
+    };
+  }
+
+  return {
+    url: args.url,
+    base_url: result.base_url || new URL(args.url).origin,
+    urls: Array.isArray(result.results) ? result.results : [],
+    diagnostics,
   };
 }
 
+function errorOutput(error, code) {
+  return {
+    error: {
+      message: error.message,
+      code,
+    },
+    diagnostics: {
+      warnings: [],
+      provider_attempts: [],
+      mapped_at: new Date().toISOString(),
+    },
+  };
+}
+
+let stage = "argument";
 try {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
@@ -133,22 +169,20 @@ try {
     process.exit(0);
   }
 
+  stage = "config";
   const config = await loadConfig({ requireGrok: false });
   await cleanupOutputDir(config);
+  stage = "map";
   const result = await mapUrl(args.url, config, args);
   const output = publicResult(args, result);
   printJson(output);
-  if (!output.ok) {
-    console.error(output.error);
+  if (output.error) {
+    console.error(output.error.message);
     process.exitCode = 1;
   }
 } catch (error) {
-  printJson({
-    ok: false,
-    error: error.message,
-    warnings: [],
-    mapped_at: new Date().toISOString(),
-  });
+  const code = error.code || (stage === "argument" ? "ARGUMENT_ERROR" : stage === "map" ? "MAP_ERROR" : "RUNTIME_ERROR");
+  printJson(errorOutput(error, code));
   console.error(error.message);
-  process.exitCode = 1;
+  process.exitCode = stage === "argument" ? 2 : 1;
 }

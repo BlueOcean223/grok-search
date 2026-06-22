@@ -3,7 +3,7 @@ import { loadConfig } from "./lib/config.js";
 import { cleanupOutputDir, previewText, printJson } from "./lib/output.js";
 import { fetchUrl } from "./lib/providers.js";
 
-const DEFAULT_MAX_CHARS = 30000;
+const DEFAULT_MAX_CHARS = 12000;
 
 function usage() {
   return `Usage: ./scripts/fetch.js [--provider auto|tavily|firecrawl|direct] [--max-chars N] <url>
@@ -81,40 +81,76 @@ function parseArgs(argv) {
   return { url: parsed.toString(), provider, maxChars };
 }
 
-async function publicResult(url, result, config, maxChars) {
+async function publicResult(args, result, config) {
   const ok = Boolean(result.ok);
   const warnings = [...(result.warnings || [])];
+  const fetchedAt = new Date().toISOString();
+  const diagnostics = {
+    provider: result.provider,
+    warnings,
+    provider_attempts: result.tried || [],
+    options: {
+      provider: args.provider,
+      max_chars: args.maxChars,
+    },
+    fetched_at: fetchedAt,
+  };
+
+  if (!ok) {
+    const error = {
+      message: result.error || "提取失败: 所有提取服务均未能获取内容",
+      code: "FETCH_ERROR",
+    };
+    if (result.error_preview != null) error.preview = result.error_preview;
+
+    return {
+      error,
+      diagnostics,
+    };
+  }
+
   const contentInfo = ok
     ? await previewText(config, {
         kind: "fetch",
         provider: result.provider,
-        label: result.final_url || url,
+        label: result.final_url || args.url,
         content: result.content || "",
-        maxChars,
+        maxChars: args.maxChars,
         extension: "md",
       })
-    : { preview: undefined, truncated: false, original_length: 0, full_output_path: null };
+    : { preview: "", truncated: false, original_length: 0, full_output_path: null };
 
   return {
-    ok,
-    url,
-    final_url: result.final_url || url,
+    url: args.url,
+    final_url: result.final_url || args.url,
     redirected: Boolean(result.redirected),
-    provider: result.provider,
-    content: contentInfo.preview,
-    truncated: contentInfo.truncated,
-    content_length: contentInfo.preview ? contentInfo.preview.length : 0,
-    original_length: contentInfo.original_length,
-    full_output_path: contentInfo.full_output_path,
-    warnings,
-    error: ok ? undefined : result.error || "提取失败: 所有提取服务均未能获取内容",
-    error_preview: ok ? undefined : result.error_preview ?? null,
-    metadata: result.metadata,
-    tried: result.tried || [],
-    fetched_at: new Date().toISOString(),
+    metadata: result.metadata || {},
+    content: {
+      text: contentInfo.preview,
+      chars: contentInfo.preview.length,
+      original_chars: contentInfo.original_length,
+      truncated: contentInfo.truncated,
+      full_path: contentInfo.full_output_path,
+    },
+    diagnostics,
   };
 }
 
+function errorOutput(error, code) {
+  return {
+    error: {
+      message: error.message,
+      code,
+    },
+    diagnostics: {
+      warnings: [],
+      provider_attempts: [],
+      fetched_at: new Date().toISOString(),
+    },
+  };
+}
+
+let stage = "argument";
 try {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
@@ -122,24 +158,22 @@ try {
     process.exit(0);
   }
 
+  stage = "config";
   const config = await loadConfig({ requireGrok: false });
   await cleanupOutputDir(config);
+  stage = "fetch";
   const result = await fetchUrl(args.url, config, { provider: args.provider });
-  const output = await publicResult(args.url, result, config, args.maxChars);
+  const output = await publicResult(args, result, config);
 
   printJson(output);
-  if (!output.ok) {
-    console.error(output.error);
+  if (output.error) {
+    console.error(output.error.message);
     process.exitCode = 1;
   }
 } catch (error) {
-  printJson({
-    ok: false,
-    error: error.message,
-    warnings: [],
-    fetched_at: new Date().toISOString(),
-  });
+  const code = error.code || (stage === "argument" ? "ARGUMENT_ERROR" : stage === "fetch" ? "FETCH_ERROR" : "RUNTIME_ERROR");
+  printJson(errorOutput(error, code));
   console.error(error.message);
-  console.error(usage());
-  process.exitCode = 2;
+  if (stage === "argument") console.error(usage());
+  process.exitCode = stage === "argument" ? 2 : 1;
 }
