@@ -53,6 +53,101 @@ export function mergeSources(...sourceLists) {
   return merged;
 }
 
+function textField(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : "";
+}
+
+function sourceSnippet(source) {
+  return textField(source?.snippet) || textField(source?.description) || textField(source?.content);
+}
+
+function clipText(value, maxChars) {
+  const text = textField(value);
+  if (!text) return "";
+  const limit = Number.isFinite(maxChars) ? Math.max(0, maxChars) : text.length;
+  if (limit <= 0) return "";
+  return text.length > limit ? text.slice(0, limit).trimEnd() : text;
+}
+
+export function compactSource(source, { sourceChars = 400 } = {}) {
+  const url = typeof source?.url === "string" ? trimUrl(source.url.trim()) : "";
+  if (!url) return null;
+
+  const out = {
+    provider: textField(source.provider) || "unknown",
+    url,
+  };
+
+  const title = textField(source.title);
+  if (title) out.title = title;
+
+  const snippet = clipText(sourceSnippet(source), sourceChars);
+  if (snippet) out.snippet = snippet;
+
+  if (Number.isFinite(source?.score)) out.score = source.score;
+
+  const publishedDate = textField(source?.published_date);
+  if (publishedDate) out.published_date = publishedDate;
+
+  return out;
+}
+
+export function compactSources(sources, options = {}) {
+  return (sources || []).map((source) => compactSource(source, options)).filter(Boolean);
+}
+
+export function hasRawSourceValue(source, compacted = compactSource(source)) {
+  if (!source || !compacted) return false;
+
+  for (const [key, value] of Object.entries(source)) {
+    if (value == null) continue;
+
+    if (key === "provider" && textField(value) === compacted.provider) continue;
+    if (key === "url" && trimUrl(String(value).trim()) === compacted.url) continue;
+    if (key === "title" && textField(value) === compacted.title) continue;
+    if (key === "score" && Number.isFinite(value) && value === compacted.score) continue;
+    if (key === "published_date" && textField(value) === compacted.published_date) continue;
+
+    if (key === "snippet" || key === "description" || key === "content") {
+      const rawText = textField(value);
+      if (!rawText) continue;
+      if (compacted.snippet === rawText) continue;
+      return true;
+    }
+
+    return true;
+  }
+
+  return false;
+}
+
+export function hasRawSourceValues(rawSources, compactedSources) {
+  return (rawSources || []).some((source, index) => hasRawSourceValue(source, compactedSources?.[index]));
+}
+
+export function buildRawSourcesPayload({
+  query,
+  grok = [],
+  extra = [],
+  providerRaw = {},
+  providerAttempts = [],
+  createdAt = new Date().toISOString(),
+} = {}) {
+  const provider_raw = {};
+  for (const [provider, raw] of Object.entries(providerRaw || {})) {
+    if (raw !== undefined) provider_raw[provider] = raw;
+  }
+
+  return {
+    query,
+    grok,
+    extra,
+    provider_raw,
+    provider_attempts: providerAttempts || [],
+    created_at: createdAt,
+  };
+}
+
 export function splitAnswerAndSources(text) {
   const raw = String(text || "").trim();
   if (!raw) return { answer: "", sources: [] };

@@ -1,6 +1,12 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
-import { extractUniqueUrls, mergeSources, splitAnswerAndSources } from "../scripts/lib/sources.js";
+import {
+  compactSource,
+  extractUniqueUrls,
+  hasRawSourceValue,
+  mergeSources,
+  splitAnswerAndSources,
+} from "../scripts/lib/sources.js";
 
 const fixtures = [
   {
@@ -75,5 +81,36 @@ assert.deepEqual(
   ),
   ["https://A.example/path/", "https://b.example/"]
 );
+
+const compacted = compactSource(
+  {
+    provider: "tavily",
+    title: "  Example  ",
+    url: "https://example.com/a",
+    description: "abcdefghijklmnopqrstuvwxyz",
+    score: 0.91,
+    published_date: "2026-06-22",
+    raw_extra: { hidden: true },
+  },
+  { sourceChars: 10 }
+);
+assert.deepEqual(compacted, {
+  provider: "tavily",
+  url: "https://example.com/a",
+  title: "Example",
+  snippet: "abcdefghij",
+  score: 0.91,
+  published_date: "2026-06-22",
+});
+assert.equal(Object.hasOwn(compacted, "description"), false);
+assert.equal(Object.hasOwn(compacted, "content"), false);
+assert.equal(hasRawSourceValue({ provider: "tavily", url: "https://example.com/a", description: "abcdefghijklmnopqrstuvwxyz" }, compacted), true);
+
+const noSnippet = compactSource({ provider: "grok", url: "https://example.com/b", description: "hidden" }, { sourceChars: 0 });
+assert.deepEqual(noSnippet, { provider: "grok", url: "https://example.com/b" });
+assert.equal(hasRawSourceValue({ provider: "grok", url: "https://example.com/b", description: "hidden" }, noSnippet), true);
+
+const fullSnippet = compactSource({ provider: "grok", url: "https://example.com/c", snippet: "short" }, { sourceChars: 400 });
+assert.equal(hasRawSourceValue({ provider: "grok", url: "https://example.com/c", snippet: "short" }, fullSnippet), false);
 
 console.log("sources fixtures ok");

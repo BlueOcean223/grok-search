@@ -80,6 +80,16 @@ export async function writeFullOutput(config, { kind, provider, label, content, 
   return fullPath;
 }
 
+export async function writeJsonOutput(config, { kind, provider, label, value }) {
+  return writeFullOutput(config, {
+    kind,
+    provider,
+    label,
+    content: JSON.stringify(value, jsonReplacer, 2),
+    extension: "json",
+  });
+}
+
 export async function previewText(config, { kind, provider, label, content, maxChars, extension = "txt" }) {
   const text = String(content ?? "");
   const limit = Number.isFinite(maxChars) ? Math.max(0, maxChars) : text.length;

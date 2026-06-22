@@ -11,6 +11,8 @@ export class ConfigError extends Error {
 }
 
 const DEFAULT_MODEL = "grok-4-fast";
+const DEFAULT_EXTRA = 5;
+const DEFAULT_SOURCE_CHARS = 400;
 const DEFAULT_TAVILY_API_URL = "https://api.tavily.com";
 const DEFAULT_FIRECRAWL_API_URL = "https://api.firecrawl.dev/v2";
 const DEFAULT_OUTPUT_DIR = path.join(homedir(), ".cache", "grok-search", "outputs");
@@ -41,6 +43,11 @@ function envFloat(name, defaultValue, { min = -Infinity } = {}) {
   return Number.isFinite(parsed) && parsed >= min ? parsed : defaultValue;
 }
 
+function parseConfigInt(value, fallback, { min = Number.MIN_SAFE_INTEGER } = {}) {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed >= min ? parsed : fallback;
+}
+
 export function configFilePath() {
   return path.join(homedir(), ".config", "grok-search", "config.json");
 }
@@ -68,6 +75,13 @@ function envOrFile(envName, fileConfig, keys, fallback) {
   if (envValue != null) return envValue;
   const configValue = fileValue(fileConfig, keys);
   return configValue == null ? fallback : configValue;
+}
+
+function envOrFileInt(envName, fileConfig, keys, fallback, { min = Number.MIN_SAFE_INTEGER } = {}) {
+  const envValue = env(envName);
+  if (envValue != null) return parseConfigInt(envValue, fallback, { min });
+  const configValue = fileValue(fileConfig, keys);
+  return configValue == null ? fallback : parseConfigInt(configValue, fallback, { min });
 }
 
 function resolveUserPath(value) {
@@ -120,6 +134,12 @@ export async function loadConfig({ requireGrok = false } = {}) {
     retryMaxAttempts: envInt("GROK_RETRY_MAX_ATTEMPTS", 3, { min: 1 }),
     retryMultiplier: envFloat("GROK_RETRY_MULTIPLIER", 1, { min: 0 }),
     retryMaxWait: envFloat("GROK_RETRY_MAX_WAIT", 10, { min: 0 }),
+    defaultExtra: envOrFileInt("GROK_DEFAULT_EXTRA", fileConfig, ["GROK_DEFAULT_EXTRA", "defaultExtra", "default_extra"], DEFAULT_EXTRA, {
+      min: 0,
+    }),
+    sourceChars: envOrFileInt("GROK_SOURCE_CHARS", fileConfig, ["GROK_SOURCE_CHARS", "sourceChars", "source_chars"], DEFAULT_SOURCE_CHARS, {
+      min: 0,
+    }),
     outputDir,
     outputRetentionDays: DEFAULT_OUTPUT_RETENTION_DAYS,
     debug: envBool("GROK_DEBUG", false),
