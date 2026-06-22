@@ -21,15 +21,18 @@ Do not chain map → fetch → search by default. Run the fewest commands that a
 
 ```bash
 ./scripts/search.js "query"
-./scripts/search.js --platform GitHub --extra 5 "query"
-./scripts/search.js --model grok-4-fast --max-chars 50000 "query"
+./scripts/search.js --platform GitHub "query"
+./scripts/search.js --extra 10 "query"
+./scripts/search.js --no-extra "query"
+./scripts/search.js --source-chars 200 "query"
 ```
 
 ```bash
 ./scripts/fetch.js https://example.com
 ./scripts/fetch.js --provider direct https://example.com
-./scripts/fetch.js --max-chars 50000 https://example.com
 ```
+
+Use `./scripts/fetch.js --max-chars 50000 URL` only for an explicit deep read after the preview shows the page is worth reading.
 
 ```bash
 ./scripts/map.js https://docs.example.com --limit 20
@@ -37,7 +40,7 @@ Do not chain map → fetch → search by default. Run the fewest commands that a
 ./scripts/map.js https://docs.example.com --instructions "only API reference pages" --max-depth 2
 ```
 
-Add `--extra N` to `search.js` only when the user wants more sources alongside Grok's answer. The Grok answer itself does not change — the extras are leads to verify, not citations Grok used.
+When `TAVILY_API_KEY` or `FIRECRAWL_API_KEY` is configured, `search.js` automatically adds a small extra source set by default. Add `--extra 10` only when the user wants a broader candidate-source sweep alongside Grok's answer. The Grok answer itself does not change — the extras are leads to verify, not citations Grok used.
 
 ## Reading Results
 
@@ -45,16 +48,20 @@ Each script writes a single JSON object to stdout. On failure it still writes JS
 
 Check in this order:
 
-- `ok` — if false, read `error`, `warnings`, and any provider attempts (`tried` for fetch/map, `extra_tried` for search) to see what went wrong. Before retrying, change something: a sharper query, a different `--provider` (fetch/map), or a different `--model` (search). Do not rerun the same command.
-- `truncated` — if true and the preview is enough, stop. If you need more, read `full_output_path` in chunks; do not rerun the command.
-- `warnings`, `tried`, `extra_tried`, `provider` — these tell you which providers were skipped, which failed, and which actually produced the content. `search.js` returns `extra_tried` and `model` instead of `tried`/`provider`.
+- `error` — if present, read `error.message`, `error.code`, `error.preview` if present, and `diagnostics.provider_attempts`. Before retrying, change something: a sharper query, a different `--provider` (fetch/map), or a different `--model` (search). Do not rerun the same command.
+- `diagnostics.warnings` and `diagnostics.provider_attempts` — these tell you which providers were skipped, failed, or produced content.
+- Search success: read `answer.text`, then `sources.merged`. Source cards are short and use `snippet`, not `description` or `content`. Full source/provider raw is in `sources.raw_path`; read it in chunks only when needed.
+- Fetch success: read `content.text`. If `content.truncated` is true and the preview is enough, stop. If more is needed, read `content.full_path` in chunks or rerun once with a deliberate larger `--max-chars`.
+- Map success: read `urls`, choose the best candidates, then fetch only the few URLs you need.
+
+Search and fetch are intentionally separated. Use search to discover and compare sources, then fetch a specific URL for deep reading. In one research turn, fetch 1-2 URLs by default; do not batch-fetch many pages unless the user explicitly asks.
 
 ## Providers And Limits
 
 `fetch.js` provider order for `--provider auto`: Tavily Extract → Firecrawl Scrape → Direct Fetch.
 `map.js` provider order for `--provider auto`: Tavily Map → Direct Map.
 
-Without `TAVILY_API_KEY` / `FIRECRAWL_API_KEY`, only the direct providers run. The direct providers do not execute JavaScript, log in, use cookies, parse PDFs, or bypass anti-bot. Direct Map only reads `/sitemap.xml` and same-domain homepage links, ignores `--instructions`, and is limited to `--max-depth 1`.
+For search, missing Tavily/Firecrawl keys simply means no automatic extra sources and no noisy warning. For fetch/map, missing keys mean only direct providers run. The direct providers do not execute JavaScript, log in, use cookies, parse PDFs, or bypass anti-bot. Direct Map only reads `/sitemap.xml` and same-domain homepage links, ignores `--instructions`, and is limited to `--max-depth 1`.
 
 ## Proxy
 

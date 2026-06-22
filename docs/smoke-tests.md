@@ -37,13 +37,14 @@ export GROK_MODEL="grok-4-fast"
 
 ```bash
 export TAVILY_API_KEY="tvly-your-key"
-./scripts/search.js --extra 5 "latest pi coding agent docs"
+./scripts/search.js "latest pi coding agent docs"
+./scripts/search.js --extra 10 "latest pi coding agent docs"
 
 export FIRECRAWL_API_KEY="fc-your-key"
-./scripts/search.js --extra 5 "latest pi coding agent docs"
+./scripts/search.js --extra 10 "latest pi coding agent docs"
 ```
 
-`--extra` sources are supplemental references. They do not rewrite the Grok answer.
+When a Tavily or Firecrawl key is configured, default search automatically adds a small extra source set. `--extra 10` is for a broader candidate-source sweep. Extra sources are supplemental references; they do not rewrite the Grok answer.
 
 ## Fetch Providers
 
@@ -67,9 +68,16 @@ export TAVILY_API_KEY="tvly-your-key"
 
 Every non-help command should write JSON to stdout. Failure JSON should include:
 
-- `ok: false`
-- `error`
-- `warnings`
-- a script-specific timestamp field: `fetched_at`, `searched_at`, or `mapped_at`
+- `error.message`
+- `error.code`
+- `diagnostics.warnings`
+- `diagnostics.provider_attempts`
+- a script-specific timestamp field under diagnostics: `diagnostics.fetched_at`, `diagnostics.searched_at`, or `diagnostics.mapped_at`
+
+Success JSON should use command-native fields:
+
+- search: `answer.text`, `sources.merged`, optional `sources.raw_path`, and `diagnostics`
+- fetch: `content.text`, optional `content.full_path`, and `diagnostics`
+- map: `urls` and `diagnostics`
 
 stderr should contain only a short human-readable summary and must not contain API keys.

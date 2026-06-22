@@ -86,9 +86,11 @@ Supported variables:
 | `GROK_API_URL` | `apiUrl` | Yes for search | `search.js` | OpenAI-compatible base URL that supports `/chat/completions`. |
 | `GROK_API_KEY` | `apiKey` | Yes for search | `search.js` | API key for `GROK_API_URL`. |
 | `GROK_MODEL` | `model` | No | `search.js` | Defaults to `grok-4-fast`. |
-| `TAVILY_API_KEY` | `tavilyApiKey` | No | `search.js --extra`, `fetch.js`, `map.js` | Enables Tavily Search/Extract/Map. Without it, `fetch.js` and `map.js` use direct fallbacks. |
+| `GROK_DEFAULT_EXTRA` | `defaultExtra` | No | `search.js` | Default extra source count when Tavily or Firecrawl is configured. Default: `5`. |
+| `GROK_SOURCE_CHARS` | `sourceChars` | No | `search.js` | Per-source stdout snippet limit. Default: `400`; `0` omits snippets. |
+| `TAVILY_API_KEY` | `tavilyApiKey` | No | `search.js`, `fetch.js`, `map.js` | Enables Tavily Search/Extract/Map. Without it, `fetch.js` and `map.js` use direct fallbacks. |
 | `TAVILY_API_URL` | `tavilyApiUrl` | No | Tavily paths | Defaults to `https://api.tavily.com`. |
-| `FIRECRAWL_API_KEY` | `firecrawlApiKey` | No | `fetch.js`, `search.js --extra` | Enables Firecrawl Scrape fallback and extra search sources. |
+| `FIRECRAWL_API_KEY` | `firecrawlApiKey` | No | `search.js`, `fetch.js` | Enables Firecrawl Scrape fallback and extra search sources. |
 | `FIRECRAWL_API_URL` | `firecrawlApiUrl` | No | Firecrawl paths | Defaults to `https://api.firecrawl.dev/v2`. |
 | `GROK_OUTPUT_DIR` | `outputDir` | No | all scripts | Overrides long-output storage. Default: `~/.cache/grok-search/outputs/`. |
 | `GROK_DEBUG` | — | No | all scripts | Env only. `true` prints retry/cleanup/proxy debug logs to stderr. |
@@ -96,31 +98,60 @@ Supported variables:
 
 If `GROK_API_URL` contains `openrouter`, the model automatically gets `:online` unless it already has that suffix.
 
+## Output Schema
+
+This version uses command-native JSON output. This is a **breaking change** from the older `ok`/`kind` style envelope.
+
+On failure, every script returns:
+
+```json
+{
+  "error": {
+    "message": "...",
+    "code": "FETCH_ERROR"
+  },
+  "diagnostics": {
+    "warnings": [],
+    "provider_attempts": []
+  }
+}
+```
+
+On success, provider attempts, warnings, timestamps, and command options live under `diagnostics`.
+
 ## Search
 
 ```bash
 ./scripts/search.js "What changed in the latest Node.js LTS?"
 ./scripts/search.js --platform GitHub "pi coding agent search skill"
-./scripts/search.js --extra 5 "latest pi coding agent docs"
-./scripts/search.js --model grok-4-fast --max-chars 50000 "query"
+./scripts/search.js --extra 10 "latest pi coding agent docs"
+./scripts/search.js --no-extra "query"
+./scripts/search.js --source-chars 200 "query"
+./scripts/search.js --full-sources "debug provider raw"
 ```
 
 `search.js` calls `{GROK_API_URL}/chat/completions` with `stream:false`, injects local time context, and returns:
 
-- `answer`
-- `sources`
-- `sources_count`
-- `warnings`
-- `extra_tried` when `--extra` is used
-- truncation fields when the answer is long
+- `answer.text`, `answer.chars`, `answer.original_chars`, `answer.truncated`, `answer.full_path`
+- `sources.grok`, `sources.extra`, and `sources.merged` compact source cards
+- `sources.raw_path` when full source/provider raw data is stored on disk
+- `sources.raw` only when `--full-sources` is used
+- `diagnostics.warnings`, `diagnostics.provider_attempts`, `diagnostics.options`, and `diagnostics.searched_at`
 
-Extra sources are supplemental. They are added to `sources`, but they do not rewrite the Grok answer.
+If Tavily or Firecrawl is configured, search automatically adds a small extra source set by default. Without those keys, default search stays quiet and returns only Grok answer/sources. Extra sources are supplemental candidates; they do not rewrite the Grok answer.
+
+Source cards intentionally do not include long `description` or `content` fields. They use short `snippet` fields, with full raw data available through `sources.raw_path`.
 
 ## Fetch
 
 ```bash
 ./scripts/fetch.js https://example.com
 ./scripts/fetch.js --provider direct https://example.com
+```
+
+Default fetch output is a 12,000-character preview. Use `--max-chars 50000` only for an explicit deep read after the preview is useful.
+
+```bash
 ./scripts/fetch.js --max-chars 50000 https://example.com
 ```
 
@@ -131,6 +162,8 @@ Tavily Extract -> Firecrawl Scrape -> Direct Fetch
 ```
 
 Direct Fetch is a best-effort fallback for normal HTTP(S) text pages. It strips simple HTML, formats JSON when possible, records redirects, and rejects binary/attachment/oversized responses.
+
+Successful fetch output uses `content.text`, `content.chars`, `content.original_chars`, `content.truncated`, and `content.full_path`, with provider details under `diagnostics`.
 
 ## Map
 
@@ -148,6 +181,8 @@ Tavily Map -> Direct Map
 
 Without `TAVILY_API_KEY`, Tavily Map is unavailable and `map.js` falls back to Direct Map. Direct Map only checks same-site `/sitemap.xml`, then same-domain links on the homepage. It ignores `--instructions` and supports only `--max-depth 1`.
 
+Successful map output uses `urls` for discovered URLs. Provider, response time, ignored instructions, warnings, attempts, and options live under `diagnostics`.
+
 ## Output Files
 
 All scripts keep stdout as complete JSON. Long text fields are returned as previews, and the full content is written to:
@@ -158,7 +193,11 @@ All scripts keep stdout as complete JSON. Long text fields are returned as previ
 
 Set `GROK_OUTPUT_DIR` to override this path. Each run performs best-effort cleanup of `grok-search-*` files older than 30 days inside the output directory.
 
-When JSON contains `full_output_path`, read that file if the full text is needed.
+Read these paths only when the preview is not enough:
+
+- `answer.full_path` for full search answers
+- `content.full_path` for full fetched page text
+- `sources.raw_path` for full source/provider raw data
 
 ## Smoke Tests
 
