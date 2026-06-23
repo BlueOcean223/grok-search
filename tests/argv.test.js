@@ -17,6 +17,7 @@ async function runNode(args, env = {}) {
       env: {
         ...process.env,
         HOME: testHome,
+        USERPROFILE: testHome,
         TAVILY_API_KEY: "",
         FIRECRAWL_API_KEY: "",
         TAVILY_API_URL: "",
@@ -211,6 +212,238 @@ await withServer(
     assert.equal(output.diagnostics.options.extra, 0);
     assert.equal(output.diagnostics.options.extra_mode, "auto");
     assert.equal(searchResult.stderr, "");
+  }
+);
+
+await withServer(
+  (req, res) => {
+    let body = "";
+    req.setEncoding("utf8");
+    req.on("data", (chunk) => {
+      body += chunk;
+    });
+    req.on("end", () => {
+      assert.equal(req.url, "/responses");
+      const parsed = JSON.parse(body);
+      assert.equal(parsed.model, "mock-model");
+      assert.equal(parsed.max_turns, 2);
+      assert.equal(parsed.reasoning.effort, "medium");
+      assert.deepEqual(parsed.tools, [
+        { type: "web_search", allowed_domains: ["docs.x.ai", "openai.com"] },
+        { type: "x_search", allowed_x_handles: ["xai", "OpenAI"] },
+      ]);
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify({
+          output: [
+            {
+              type: "message",
+              content: [
+                {
+                  type: "output_text",
+                  text: "Responses answer.",
+                  annotations: [{ url: "https://Example.com/a/#cite", title: "Official A" }],
+                },
+              ],
+            },
+            {
+              type: "web_search_call",
+              status: "completed",
+              action: {
+                sources: [
+                  { url: "https://example.com/a", snippet: "official snippet" },
+                  { url: "https://example.com/b", title: "Candidate B" },
+                ],
+              },
+            },
+          ],
+          usage: { cost_in_usd_ticks: 123456 },
+        })
+      );
+    });
+  },
+  async (_server, port) => {
+    const searchResult = await runNode(
+      [
+        "scripts/search.js",
+        "--search-mode",
+        "responses",
+        "--responses-max-turns",
+        "2",
+        "--responses-reasoning-effort",
+        "medium",
+        "--responses-allowed-domains",
+        "docs.x.ai,openai.com",
+        "--responses-x-search",
+        "--responses-allowed-x-handles",
+        "xai,OpenAI",
+        "mock query",
+      ],
+      {
+        GROK_API_URL: `http://127.0.0.1:${port}`,
+        GROK_API_KEY: "secret-search-key",
+        GROK_API_PROVIDER: "xai",
+        GROK_MODEL: "mock-model",
+      }
+    );
+    assert.equal(searchResult.code, 0);
+    const output = parseJson(searchResult.stdout);
+    assert.equal(output.answer.text, "Responses answer.");
+    assert.equal(output.diagnostics.grok_endpoint, "responses");
+    assert.equal(output.diagnostics.options.search_mode, "responses");
+    assert.equal(output.diagnostics.options.actual_search_mode, "responses");
+    assert.equal(output.diagnostics.cost_in_usd_ticks, 123456);
+    assert.equal(output.diagnostics.cost_usd, 0.0000123456);
+    assert.deepEqual(
+      output.sources.grok.map((source) => ({ source_type: source.source_type, tool: source.tool, url: source.url })),
+      [
+        { source_type: "citation", tool: "web_search", url: "https://example.com/a" },
+        { source_type: "searched", tool: "web_search", url: "https://example.com/b" },
+      ]
+    );
+  }
+);
+
+await withServer(
+  (req, res) => {
+    let body = "";
+    req.setEncoding("utf8");
+    req.on("data", (chunk) => {
+      body += chunk;
+    });
+    req.on("end", () => {
+      assert.equal(req.url, "/responses");
+      const parsed = JSON.parse(body);
+      assert.equal(parsed.model, "x-ai/grok-4.1-fast");
+      assert.equal(parsed.model.includes(":online"), false);
+      assert.deepEqual(parsed.tools, [
+        {
+          type: "openrouter:web_search",
+          parameters: {
+            engine: "exa",
+            max_results: 5,
+            max_total_results: 10,
+            excluded_domains: ["reddit.com"],
+          },
+        },
+      ]);
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify({
+          output: [
+            {
+              type: "message",
+              message: {
+                content: [
+                  {
+                    type: "output_text",
+                    text: "OpenRouter Responses answer.",
+                    annotations: [{ url: "https://router.example/source", title: "Router Source" }],
+                  },
+                ],
+              },
+            },
+          ],
+          citations: ["https://router.example/top"],
+        })
+      );
+    });
+  },
+  async (_server, port) => {
+    const searchResult = await runNode(
+      [
+        "scripts/search.js",
+        "--search-mode",
+        "responses",
+        "--responses-openrouter-engine",
+        "exa",
+        "--responses-excluded-domains",
+        "reddit.com",
+        "mock query",
+      ],
+      {
+        GROK_API_URL: `http://127.0.0.1:${port}`,
+        GROK_API_KEY: "secret-search-key",
+        GROK_API_PROVIDER: "openrouter",
+        GROK_MODEL: "x-ai/grok-4.1-fast",
+        GROK_SEARCH_MODE: "bad-env-value",
+        GROK_RESPONSES_OPENROUTER_ENGINE: "bad-env-value",
+        GROK_RESPONSES_ALLOWED_DOMAINS: "from-env.example",
+      }
+    );
+    assert.equal(searchResult.code, 0);
+    const output = parseJson(searchResult.stdout);
+    assert.equal(output.model, "x-ai/grok-4.1-fast");
+    assert.equal(output.diagnostics.options.api_provider, "openrouter");
+    assert.equal(output.sources.grok[0].tool, "openrouter:web_search");
+  }
+);
+
+await withServer(
+  (req, res) => {
+    req.resume();
+    if (req.url === "/responses") {
+      res.writeHead(500, { "content-type": "text/plain" });
+      res.end("responses unavailable");
+      return;
+    }
+    if (req.url === "/chat/completions") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ choices: [{ message: { content: "Fallback answer.\n\nSources:\n- https://source.example/fallback" } }] }));
+      return;
+    }
+    res.writeHead(404);
+    res.end("not found");
+  },
+  async (_server, port) => {
+    const searchResult = await runNode(["scripts/search.js", "--search-mode", "responses", "--fallback-chat", "mock query"], {
+      GROK_API_URL: `http://127.0.0.1:${port}`,
+      GROK_API_KEY: "secret-search-key",
+      GROK_API_PROVIDER: "xai",
+      GROK_MODEL: "mock-model",
+      GROK_RETRY_MAX_ATTEMPTS: "1",
+    });
+    assert.equal(searchResult.code, 0);
+    const output = parseJson(searchResult.stdout);
+    assert.equal(output.answer.text, "Fallback answer.");
+    assert.equal(output.diagnostics.grok_endpoint, "chat/completions");
+    assert.equal(output.diagnostics.requested_grok_endpoint, "responses");
+    assert.equal(output.diagnostics.fallback_chat, true);
+    assert.equal(output.diagnostics.options.search_mode, "responses");
+    assert.equal(output.diagnostics.options.actual_search_mode, "chat");
+    assert.deepEqual(
+      output.diagnostics.provider_attempts.map((attempt) => attempt.provider),
+      ["grok-responses:xai", "grok-chat"]
+    );
+  }
+);
+
+await withServer(
+  (req, res) => {
+    req.resume();
+    res.writeHead(500, { "content-type": "text/plain" });
+    res.end("should not be called");
+  },
+  async (_server, port) => {
+    const searchResult = await runNode(
+      [
+        "scripts/search.js",
+        "--search-mode",
+        "responses",
+        "--responses-allowed-domains",
+        "a.example",
+        "--responses-excluded-domains",
+        "b.example",
+        "mock query",
+      ],
+      {
+        GROK_API_URL: `http://127.0.0.1:${port}`,
+        GROK_API_KEY: "secret-search-key",
+      }
+    );
+    assert.equal(searchResult.code, 1);
+    const output = parseJson(searchResult.stdout);
+    assert.equal(output.error.code, "RESPONSES_FILTER_CONFLICT");
   }
 );
 
