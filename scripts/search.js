@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-import { applyOpenRouterOnlineSuffix, loadConfig } from "./lib/config.js";
+import { ConfigError, loadConfig, normalizeOpenRouterSearchEngine, normalizeSearchMode } from "./lib/config.js";
 import { searchGrok } from "./lib/grok.js";
+import { searchGrokResponses } from "./lib/grok-responses.js";
 import { cleanupOutputDir, previewText, printJson, writeJsonOutput } from "./lib/output.js";
 import { firecrawlSearch, tavilySearch } from "./lib/providers.js";
 import {
@@ -14,14 +15,18 @@ import {
 const DEFAULT_MAX_CHARS = 30000;
 
 function usage() {
-  return `Usage: ./scripts/search.js [--platform NAME] [--model MODEL] [--extra N|--no-extra] [--source-chars N] [--full-sources] [--max-chars N] <query>
+  return `Usage: ./scripts/search.js [--platform NAME] [--model MODEL] [--search-mode chat|responses] [--extra N|--no-extra] [--source-chars N] [--full-sources] [--max-chars N] <query>
 
 Run a Grok/OpenRouter web search and return JSON with answer and sources.
 
 Environment:
   GROK_API_URL         OpenAI-compatible base URL; required
   GROK_API_KEY         API key for GROK_API_URL; required
+  GROK_API_PROVIDER    Optional provider: xai, openrouter, or openai-compatible
   GROK_MODEL           Optional default model; default grok-4-fast
+  GROK_SEARCH_MODE     Optional search mode: chat or responses; default chat
+  GROK_RESPONSES_MAX_TURNS
+                       Optional Responses max_turns; default 1
   GROK_DEFAULT_EXTRA   Optional default extra source count when a provider key exists; default 5
   GROK_SOURCE_CHARS    Optional source snippet size; default 400
   TAVILY_API_KEY       Optional extra sources provider
@@ -37,11 +42,24 @@ function parseIntOption(name, value, { min = 0 } = {}) {
   return parsed;
 }
 
+function parseListOption(value) {
+  return String(value || "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function parseListArg(name, value) {
+  if (value == null || value === "") throw new Error(`${name} 缺少值`);
+  return parseListOption(value);
+}
+
 function parseArgs(argv) {
   const args = [...argv];
   const queryParts = [];
   let platform = "";
   let model = "";
+  let searchMode = "";
   let extra = null;
   let extraMode = "auto";
   let extraSeen = false;
@@ -49,6 +67,15 @@ function parseArgs(argv) {
   let sourceChars = null;
   let fullSources = false;
   let maxChars = DEFAULT_MAX_CHARS;
+  let responsesMaxTurns = null;
+  let responsesReasoningEffort = "";
+  let responsesAllowedDomains = null;
+  let responsesExcludedDomains = null;
+  let responsesIncludeXSearch = null;
+  let responsesAllowedXHandles = null;
+  let responsesExcludedXHandles = null;
+  let responsesOpenRouterEngine = "";
+  let fallbackChat = null;
 
   while (args.length) {
     const arg = args.shift();
@@ -69,6 +96,81 @@ function parseArgs(argv) {
     }
     if (arg?.startsWith("--model=")) {
       model = arg.slice("--model=".length);
+      continue;
+    }
+    if (arg === "--search-mode") {
+      searchMode = args.shift() || "";
+      if (!searchMode) throw new Error("--search-mode 缺少值");
+      continue;
+    }
+    if (arg?.startsWith("--search-mode=")) {
+      searchMode = arg.slice("--search-mode=".length);
+      continue;
+    }
+    if (arg === "--responses-max-turns") {
+      responsesMaxTurns = parseIntOption("--responses-max-turns", args.shift(), { min: 1 });
+      continue;
+    }
+    if (arg?.startsWith("--responses-max-turns=")) {
+      responsesMaxTurns = parseIntOption("--responses-max-turns", arg.slice("--responses-max-turns=".length), { min: 1 });
+      continue;
+    }
+    if (arg === "--responses-reasoning-effort") {
+      responsesReasoningEffort = args.shift() || "";
+      if (!responsesReasoningEffort) throw new Error("--responses-reasoning-effort 缺少值");
+      continue;
+    }
+    if (arg?.startsWith("--responses-reasoning-effort=")) {
+      responsesReasoningEffort = arg.slice("--responses-reasoning-effort=".length);
+      continue;
+    }
+    if (arg === "--responses-allowed-domains") {
+      responsesAllowedDomains = parseListArg("--responses-allowed-domains", args.shift());
+      continue;
+    }
+    if (arg?.startsWith("--responses-allowed-domains=")) {
+      responsesAllowedDomains = parseListOption(arg.slice("--responses-allowed-domains=".length));
+      continue;
+    }
+    if (arg === "--responses-excluded-domains") {
+      responsesExcludedDomains = parseListArg("--responses-excluded-domains", args.shift());
+      continue;
+    }
+    if (arg?.startsWith("--responses-excluded-domains=")) {
+      responsesExcludedDomains = parseListOption(arg.slice("--responses-excluded-domains=".length));
+      continue;
+    }
+    if (arg === "--responses-x-search" || arg === "--responses-include-x-search") {
+      responsesIncludeXSearch = true;
+      continue;
+    }
+    if (arg === "--responses-allowed-x-handles") {
+      responsesAllowedXHandles = parseListArg("--responses-allowed-x-handles", args.shift());
+      continue;
+    }
+    if (arg?.startsWith("--responses-allowed-x-handles=")) {
+      responsesAllowedXHandles = parseListOption(arg.slice("--responses-allowed-x-handles=".length));
+      continue;
+    }
+    if (arg === "--responses-excluded-x-handles") {
+      responsesExcludedXHandles = parseListArg("--responses-excluded-x-handles", args.shift());
+      continue;
+    }
+    if (arg?.startsWith("--responses-excluded-x-handles=")) {
+      responsesExcludedXHandles = parseListOption(arg.slice("--responses-excluded-x-handles=".length));
+      continue;
+    }
+    if (arg === "--responses-openrouter-engine") {
+      responsesOpenRouterEngine = args.shift() || "";
+      if (!responsesOpenRouterEngine) throw new Error("--responses-openrouter-engine 缺少值");
+      continue;
+    }
+    if (arg?.startsWith("--responses-openrouter-engine=")) {
+      responsesOpenRouterEngine = arg.slice("--responses-openrouter-engine=".length);
+      continue;
+    }
+    if (arg === "--fallback-chat") {
+      fallbackChat = true;
       continue;
     }
     if (arg === "--extra") {
@@ -119,7 +221,26 @@ function parseArgs(argv) {
   const query = queryParts.join(" ").trim();
   if (!query) throw new Error("缺少 query");
 
-  return { query, platform, model, extra, extraMode, sourceChars, fullSources, maxChars };
+  return {
+    query,
+    platform,
+    model,
+    searchMode,
+    extra,
+    extraMode,
+    sourceChars,
+    fullSources,
+    maxChars,
+    responsesMaxTurns,
+    responsesReasoningEffort,
+    responsesAllowedDomains,
+    responsesExcludedDomains,
+    responsesIncludeXSearch,
+    responsesAllowedXHandles,
+    responsesExcludedXHandles,
+    responsesOpenRouterEngine,
+    fallbackChat,
+  };
 }
 
 function grokSources(rawSources) {
@@ -201,6 +322,82 @@ function resolveExtra(args, config) {
   return { limit: hasExtraProvider ? config.defaultExtra : 0, mode: "auto" };
 }
 
+function exclusiveOptionPair(argsLeft, argsRight, configLeft, configRight) {
+  if (argsLeft != null || argsRight != null) {
+    return {
+      left: argsLeft == null ? [] : [...argsLeft],
+      right: argsRight == null ? [] : [...argsRight],
+    };
+  }
+  return {
+    left: [...(configLeft || [])],
+    right: [...(configRight || [])],
+  };
+}
+
+function validateExclusiveLists(left, right, leftName, rightName) {
+  if (left.length && right.length) {
+    throw new ConfigError(`${leftName} 与 ${rightName} 不能同时使用`, "RESPONSES_FILTER_CONFLICT");
+  }
+}
+
+function validateMaxItems(list, name, max) {
+  if (list.length > max) throw new ConfigError(`${name} 最多支持 ${max} 个值`, "RESPONSES_FILTER_LIMIT");
+}
+
+function resolveSearchOptions(args, config) {
+  const domainFilters = exclusiveOptionPair(
+    args.responsesAllowedDomains,
+    args.responsesExcludedDomains,
+    config.responsesAllowedDomains,
+    config.responsesExcludedDomains
+  );
+  const xHandleFilters = exclusiveOptionPair(
+    args.responsesAllowedXHandles,
+    args.responsesExcludedXHandles,
+    config.responsesAllowedXHandles,
+    config.responsesExcludedXHandles
+  );
+  const allowedDomains = domainFilters.left;
+  const excludedDomains = domainFilters.right;
+  const allowedXHandles = xHandleFilters.left;
+  const excludedXHandles = xHandleFilters.right;
+
+  validateExclusiveLists(allowedDomains, excludedDomains, "responses allowed domains", "responses excluded domains");
+  validateExclusiveLists(allowedXHandles, excludedXHandles, "responses allowed X handles", "responses excluded X handles");
+  validateMaxItems(allowedDomains, "responses allowed domains", 5);
+  validateMaxItems(excludedDomains, "responses excluded domains", 5);
+
+  return {
+    searchMode: normalizeSearchMode(args.searchMode || config.searchMode),
+    model: args.model || config.grokModel,
+    maxTurns: args.responsesMaxTurns ?? config.responsesMaxTurns,
+    reasoningEffort: args.responsesReasoningEffort || config.responsesReasoningEffort,
+    allowedDomains,
+    excludedDomains,
+    includeXSearch:
+      (args.responsesIncludeXSearch ?? config.responsesIncludeXSearch) || Boolean(allowedXHandles.length || excludedXHandles.length),
+    allowedXHandles,
+    excludedXHandles,
+    openRouterEngine: normalizeOpenRouterSearchEngine(args.responsesOpenRouterEngine || config.responsesOpenRouterEngine),
+    fallbackChat: args.fallbackChat ?? config.responsesFallbackChat,
+  };
+}
+
+function responsesDiagnosticOptions(searchOptions) {
+  return {
+    responses_max_turns: searchOptions.maxTurns,
+    responses_reasoning_effort: searchOptions.reasoningEffort,
+    responses_allowed_domains: searchOptions.allowedDomains,
+    responses_excluded_domains: searchOptions.excludedDomains,
+    responses_include_x_search: searchOptions.includeXSearch,
+    responses_allowed_x_handles: searchOptions.allowedXHandles,
+    responses_excluded_x_handles: searchOptions.excludedXHandles,
+    responses_openrouter_engine: searchOptions.openRouterEngine,
+    responses_fallback_chat: searchOptions.fallbackChat,
+  };
+}
+
 async function rawSourcesPath(config, args, rawPayload, rawSourceSets, compactSourceSets) {
   const hasProviderRaw = Object.keys(rawPayload.provider_raw || {}).length > 0;
   const hasHiddenSourceValues = rawSourceSets.some((sources, index) => hasRawSourceValues(sources, compactSourceSets[index]));
@@ -214,21 +411,127 @@ async function rawSourcesPath(config, args, rawPayload, rawSourceSets, compactSo
   });
 }
 
-async function publicResult(args, config) {
-  const model = applyOpenRouterOnlineSuffix(args.model || config.grokModel, config.grokApiUrl);
-  const sourceChars = args.sourceChars ?? config.sourceChars;
-  const extraOptions = resolveExtra(args, config);
-  const grok = await searchGrok(args.query, { platform: args.platform, model }, config);
+async function chatGrokChannel(args, config, searchOptions) {
+  const grok = await searchGrok(args.query, { platform: args.platform, model: searchOptions.model }, config);
   const split = splitAnswerAndSources(grok.content);
   if (!split.answer.trim()) throw new Error("Grok 返回内容中没有可显示 answer");
 
   const warnings = [];
   if (!split.sources.length) warnings.push("No parseable sources found in Grok response.");
 
-  const extra = await extraSources(args.query, extraOptions.limit, config, { explicit: extraOptions.mode === "explicit" });
-  warnings.push(...extra.warnings);
+  return {
+    search_mode: "chat",
+    endpoint: grok.endpoint,
+    model: grok.model,
+    answer: split.answer,
+    sources: grokSources(split.sources),
+    warnings,
+    provider_attempts: [],
+    diagnostics: {},
+    raw_content_chars: grok.content.length,
+  };
+}
 
-  const rawGrokSources = grokSources(split.sources);
+async function responsesGrokChannel(args, config, searchOptions) {
+  const grok = await searchGrokResponses(
+    args.query,
+    {
+      platform: args.platform,
+      model: searchOptions.model,
+      maxTurns: searchOptions.maxTurns,
+      reasoningEffort: searchOptions.reasoningEffort,
+      allowedDomains: searchOptions.allowedDomains,
+      excludedDomains: searchOptions.excludedDomains,
+      includeXSearch: searchOptions.includeXSearch,
+      allowedXHandles: searchOptions.allowedXHandles,
+      excludedXHandles: searchOptions.excludedXHandles,
+      openRouterEngine: searchOptions.openRouterEngine,
+    },
+    config
+  );
+
+  const diagnostics = { ...(grok.diagnostics || {}) };
+  const warnings = [...(diagnostics.warnings || [])];
+  delete diagnostics.warnings;
+  if (!grok.sources.length) warnings.push("No responses citations or searched sources were found.");
+
+  return {
+    search_mode: "responses",
+    endpoint: grok.endpoint,
+    model: grok.model,
+    answer: grok.content,
+    sources: grok.sources,
+    warnings,
+    provider_attempts: [],
+    diagnostics,
+    raw_content_chars: grok.content.length,
+  };
+}
+
+function responsesFailureAttempt(config, error) {
+  return {
+    provider: `grok-responses:${config.apiProvider}`,
+    ok: false,
+    error: error.message,
+  };
+}
+
+function responsesFailureDiagnostics(config, searchOptions, error) {
+  const innerDiagnostics = error.diagnostics || {};
+  return {
+    ...innerDiagnostics,
+    grok_endpoint: "responses",
+    warnings: [`Responses search failed: ${error.message}`, ...(innerDiagnostics.warnings || [])],
+    provider_attempts: [responsesFailureAttempt(config, error)],
+    options: {
+      search_mode: "responses",
+      actual_search_mode: null,
+      api_provider: config.apiProvider,
+      ...responsesDiagnosticOptions(searchOptions),
+    },
+  };
+}
+
+async function grokChannel(args, config, searchOptions) {
+  if (searchOptions.searchMode === "chat") return chatGrokChannel(args, config, searchOptions);
+
+  try {
+    return await responsesGrokChannel(args, config, searchOptions);
+  } catch (error) {
+    if (!searchOptions.fallbackChat) {
+      error.diagnostics = responsesFailureDiagnostics(config, searchOptions, error);
+      throw error;
+    }
+
+    const chat = await chatGrokChannel(args, config, searchOptions);
+    return {
+      ...chat,
+      warnings: [`Responses failed; fell back to Chat: ${error.message}`, ...chat.warnings],
+      provider_attempts: [
+        responsesFailureAttempt(config, error),
+        { provider: "grok-chat", ok: true, count: chat.sources.length },
+      ],
+      diagnostics: {
+        ...chat.diagnostics,
+        requested_grok_endpoint: "responses",
+        fallback_chat: true,
+        responses_error: error.message,
+      },
+    };
+  }
+}
+
+async function publicResult(args, config) {
+  const searchOptions = resolveSearchOptions(args, config);
+  const sourceChars = args.sourceChars ?? config.sourceChars;
+  const extraOptions = resolveExtra(args, config);
+  const grok = await grokChannel(args, config, searchOptions);
+
+  const extra = await extraSources(args.query, extraOptions.limit, config, { explicit: extraOptions.mode === "explicit" });
+  const warnings = [...grok.warnings, ...extra.warnings];
+  const providerAttempts = [...grok.provider_attempts, ...extra.provider_attempts];
+
+  const rawGrokSources = grok.sources;
   const rawExtraSources = extra.sources;
   const rawMergedSources = mergeSources(rawGrokSources, rawExtraSources);
   const grokCompact = compactSources(rawGrokSources, { sourceChars });
@@ -239,7 +542,7 @@ async function publicResult(args, config) {
     kind: "search",
     provider: "grok",
     label: args.query,
-    content: split.answer,
+    content: grok.answer,
     maxChars: args.maxChars,
     extension: "md",
   });
@@ -249,7 +552,7 @@ async function publicResult(args, config) {
     grok: rawGrokSources,
     extra: rawExtraSources,
     providerRaw: extra.provider_raw,
-    providerAttempts: extra.provider_attempts,
+    providerAttempts,
     createdAt,
   });
   const rawPath = await rawSourcesPath(
@@ -281,16 +584,22 @@ async function publicResult(args, config) {
     },
     sources,
     diagnostics: {
+      grok_endpoint: grok.endpoint,
+      ...grok.diagnostics,
       warnings,
-      provider_attempts: extra.provider_attempts,
+      provider_attempts: providerAttempts,
       options: {
+        search_mode: searchOptions.searchMode,
+        actual_search_mode: grok.search_mode,
+        api_provider: config.apiProvider,
         extra: extraOptions.limit,
         extra_mode: extraOptions.mode,
         source_chars: sourceChars,
         max_chars: args.maxChars,
         full_sources: args.fullSources,
+        ...(searchOptions.searchMode === "responses" ? responsesDiagnosticOptions(searchOptions) : {}),
       },
-      raw_grok_content_chars: grok.content.length,
+      raw_grok_content_chars: grok.raw_content_chars,
       searched_at: createdAt,
     },
   };
@@ -327,7 +636,7 @@ try {
   printJson(output);
 } catch (error) {
   const code = error.code || (stage === "argument" ? "ARGUMENT_ERROR" : stage === "search" ? "SEARCH_ERROR" : "RUNTIME_ERROR");
-  printJson(errorOutput(error, code));
+  printJson(errorOutput(error, code, error.diagnostics));
   console.error(error.message);
   process.exitCode = stage === "argument" ? 2 : 1;
 }

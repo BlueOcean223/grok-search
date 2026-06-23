@@ -81,6 +81,12 @@ export function compactSource(source, { sourceChars = 400 } = {}) {
   const title = textField(source.title);
   if (title) out.title = title;
 
+  const sourceType = textField(source?.source_type);
+  if (sourceType) out.source_type = sourceType;
+
+  const tool = textField(source?.tool);
+  if (tool) out.tool = tool;
+
   const snippet = clipText(sourceSnippet(source), sourceChars);
   if (snippet) out.snippet = snippet;
 
@@ -105,6 +111,8 @@ export function hasRawSourceValue(source, compacted = compactSource(source)) {
     if (key === "provider" && textField(value) === compacted.provider) continue;
     if (key === "url" && trimUrl(String(value).trim()) === compacted.url) continue;
     if (key === "title" && textField(value) === compacted.title) continue;
+    if (key === "source_type" && textField(value) === compacted.source_type) continue;
+    if (key === "tool" && textField(value) === compacted.tool) continue;
     if (key === "score" && Number.isFinite(value) && value === compacted.score) continue;
     if (key === "published_date" && textField(value) === compacted.published_date) continue;
 

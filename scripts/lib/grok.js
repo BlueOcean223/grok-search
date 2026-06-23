@@ -1,4 +1,4 @@
-import { applyOpenRouterOnlineSuffix } from "./config.js";
+import { applyChatModelProviderDefaults } from "./config.js";
 import { authHeaders, requestJson } from "./providers.js";
 import { searchPrompt } from "./prompts.js";
 
@@ -18,7 +18,7 @@ export function getLocalTimeContext(date = new Date()) {
   ].join("\n");
 }
 
-function platformPrompt(platform) {
+export function platformPrompt(platform) {
   return platform
     ? `\n\nYou should search the web for the information you need, and focus on these platform: ${platform}\n`
     : "";
@@ -30,7 +30,7 @@ function extractMessageContent(data) {
 }
 
 export async function searchGrok(query, options, config) {
-  const model = applyOpenRouterOnlineSuffix(options.model || config.grokModel, config.grokApiUrl);
+  const model = applyChatModelProviderDefaults(options.model || config.grokModel, config);
   const endpoint = `${config.grokApiUrl.replace(/\/+$/, "")}/chat/completions`;
   const data = await requestJson(endpoint, {
     headers: authHeaders(config.grokApiKey),
@@ -53,6 +53,7 @@ export async function searchGrok(query, options, config) {
   return {
     model,
     content,
+    endpoint: "chat/completions",
     raw: data,
   };
 }
