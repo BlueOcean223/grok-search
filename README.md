@@ -1,30 +1,30 @@
 # grok-search
 
-**English** | [简体中文](README.zh-CN.md)
+**简体中文** | [English](README.en.md)
 
-`grok-search` is a general-purpose AI agent skill / script bundle that provides three web access capabilities through small Node.js scripts:
+`grok-search` 是一个通用 AI agent skill / 脚本包，用轻量 Node.js 脚本提供三类网络访问能力：
 
-- **Search**: call Grok / OpenRouter / OpenAI-compatible APIs for web search and source extraction.
-- **Fetch**: fetch readable content from a concrete URL, preferring Tavily / Firecrawl and falling back to keyless Direct Fetch.
-- **Map**: discover candidate URLs on a website, preferring Tavily Map and falling back to lightweight Direct Map.
+- **Search**：调用 Grok / OpenRouter / OpenAI 兼容接口进行搜索型问答，并提取信源。
+- **Fetch**：抓取指定 URL 的可读内容，优先使用 Tavily / Firecrawl，最后 fallback 到无 key 的 Direct Fetch。
+- **Map**：发现站点内的候选页面 URL，优先使用 Tavily Map，最后 fallback 到轻量 Direct Map。
 
-## Why Skill + Scripts
+## 为什么是 Skill + scripts
 
-- Keeps search tools out of the always-on model tool list.
-- Avoids MCP session state such as `get_sources`.
-- Uses one focused runtime dependency (`undici`) for proxy-aware HTTP transport.
-- Every script returns stable JSON for agent parsing.
-- The same `SKILL.md` + `scripts/` layout can be used by pi and by other agent harnesses that support skills or shell commands.
+- 不把搜索工具常驻塞进模型工具列表。
+- 不依赖 MCP 会话状态，例如 `get_sources`。
+- 使用一个聚焦的运行时依赖（`undici`）提供支持代理的 HTTP 传输。
+- 每个脚本都稳定输出 JSON，便于 agent 解析。
+- 同一套 `SKILL.md` + `scripts/` 可以用于 pi，也可以被其他支持 skill / shell 的 agent harness 复用。
 
-## Requirements
+## 要求
 
 - Node.js `>=18.17`
-- Run `npm install` once to install the `undici` transport dependency
-- `GROK_API_URL` and `GROK_API_KEY` for `search.js`
+- 需要先运行一次 `npm install` 安装 `undici` 传输依赖
+- `search.js` 需要配置 `GROK_API_URL` 和 `GROK_API_KEY`
 
-## Quick Start
+## 快速开始
 
-Install dependencies once, then run scripts from the project root:
+先安装依赖一次，然后从项目根目录运行脚本：
 
 ```bash
 npm install
@@ -33,11 +33,11 @@ npm install
 ./scripts/map.js https://docs.example.com --limit 20
 ```
 
-## Use With pi (Example)
+## 在 pi 中使用（示例）
 
-Clone or copy this directory into your pi skills location, then enable the skill through `SKILL.md`.
+把本目录 clone 或复制到你的 pi skills 位置，然后通过 `SKILL.md` 启用这个 skill。
 
-The commands are still direct script invocations:
+示例命令仍然是直接运行脚本：
 
 ```bash
 ./scripts/search.js "latest Node.js LTS"
@@ -45,17 +45,24 @@ The commands are still direct script invocations:
 ./scripts/map.js https://docs.example.com --limit 20
 ```
 
-Other agent harnesses can use the same pattern: read `SKILL.md`, then run `scripts/search.js`, `scripts/fetch.js`, or `scripts/map.js` when needed.
+其他 agent harness 也可以采用同样方式：读取 `SKILL.md`，再按需运行 `scripts/search.js`、`scripts/fetch.js`、`scripts/map.js`。
 
-## Configuration
+## 文档
 
-Recommended: keep long-lived keys in:
+- [架构说明](docs/architecture.md)
+- [功能说明](docs/features.md)
+- [Responses 模式](docs/responses-mode.md)
+- [Smoke Tests](docs/smoke-tests.md)
+
+## 配置
+
+推荐把长期使用的 key 放到：
 
 ```text
 ~/.config/grok-search/config.json
 ```
 
-Copy the example config first:
+可以从示例文件复制：
 
 ```bash
 mkdir -p ~/.config/grok-search
@@ -63,46 +70,57 @@ cp config.example.json ~/.config/grok-search/config.json
 chmod 600 ~/.config/grok-search/config.json
 ```
 
-Then edit the copied file with your real keys. Environment variables still take priority over the config file, which is useful for one-off overrides and CI.
+然后编辑复制过去的文件，填入真实 key。环境变量仍然优先于配置文件，适合临时覆盖或 CI 使用。
 
-This project does **not** auto-load `.env` files. If you prefer env vars, export them in your shell yourself.
+本项目**不会自动加载 `.env` 文件**。如果你想用环境变量，请自己在 shell 里 export。
 
-### Proxy
+### 代理
 
-Node's native `fetch` does not reliably honor terminal proxy variables by default. These scripts install an `undici` `EnvHttpProxyAgent` automatically when proxy environment variables are present, so outbound requests use your terminal proxy setup.
+Node 原生 `fetch` 默认不会可靠读取终端代理变量。本项目会在检测到代理环境变量时自动安装 `undici` 的 `EnvHttpProxyAgent`，让所有出站请求走你的终端代理配置。
 
-Supported variables:
+支持的变量：
 
 - `HTTP_PROXY` / `http_proxy`
 - `HTTPS_PROXY` / `https_proxy`
 - `ALL_PROXY` / `all_proxy`
 - `NO_PROXY` / `no_proxy`
-- `GROK_PROXY` to explicitly set one proxy URL for this tool, or `GROK_PROXY=off` to force direct connections
+- `GROK_PROXY`：显式给本工具指定一个代理 URL；设为 `GROK_PROXY=off` 可强制直连
 
-`NO_PROXY` is honored, and loopback hosts (`localhost`, `127.0.0.1`, `::1`) are always added to the bypass list.
+`NO_PROXY` 会被尊重，并且会始终把回环地址（`localhost`、`127.0.0.1`、`::1`）加入绕过列表。
 
-| Environment variable | Config key | Required | Used by | Notes |
+| 环境变量 | 配置文件 key | 是否必需 | 用途 | 说明 |
 | --- | --- | --- | --- | --- |
-| `GROK_API_URL` | `apiUrl` | Yes for search | `search.js` | OpenAI-compatible base URL that supports `/chat/completions`. |
-| `GROK_API_KEY` | `apiKey` | Yes for search | `search.js` | API key for `GROK_API_URL`. |
-| `GROK_MODEL` | `model` | No | `search.js` | Defaults to `grok-4-fast`. |
-| `GROK_DEFAULT_EXTRA` | `defaultExtra` | No | `search.js` | Default extra source count when Tavily or Firecrawl is configured. Default: `5`. |
-| `GROK_SOURCE_CHARS` | `sourceChars` | No | `search.js` | Per-source stdout snippet limit. Default: `400`; `0` omits snippets. |
-| `TAVILY_API_KEY` | `tavilyApiKey` | No | `search.js`, `fetch.js`, `map.js` | Enables Tavily Search/Extract/Map. Without it, `fetch.js` and `map.js` use direct fallbacks. |
-| `TAVILY_API_URL` | `tavilyApiUrl` | No | Tavily paths | Defaults to `https://api.tavily.com`. |
-| `FIRECRAWL_API_KEY` | `firecrawlApiKey` | No | `search.js`, `fetch.js` | Enables Firecrawl Scrape fallback and extra search sources. |
-| `FIRECRAWL_API_URL` | `firecrawlApiUrl` | No | Firecrawl paths | Defaults to `https://api.firecrawl.dev/v2`. |
-| `GROK_OUTPUT_DIR` | `outputDir` | No | all scripts | Overrides long-output storage. Default: `~/.cache/grok-search/outputs/`. |
-| `GROK_DEBUG` | — | No | all scripts | Env only. `true` prints retry/cleanup/proxy debug logs to stderr. |
-| `GROK_PROXY` | — | No | all scripts | Env only. Explicit proxy URL for this tool, or `off`/`direct` to disable proxy use. |
+| `GROK_API_URL` | `apiUrl` | search 必需 | `search.js` | 支持 `/chat/completions` 的 OpenAI 兼容 base URL。 |
+| `GROK_API_KEY` | `apiKey` | search 必需 | `search.js` | `GROK_API_URL` 对应的 API key。 |
+| `GROK_API_PROVIDER` | `apiProvider` | 否 | `search.js` | `xai`、`openrouter` 或 `openai-compatible`。未配置时按 URL 推断。 |
+| `GROK_MODEL` | `model` | 否 | `search.js` | 默认 `grok-4-fast`。 |
+| `GROK_SEARCH_MODE` | `searchMode` | 否 | `search.js` | `chat` 或 `responses`。默认 `chat`。 |
+| `GROK_RESPONSES_MAX_TURNS` | `responsesMaxTurns` | 否 | Responses | 默认 `1`，控制 Responses agentic turn 上限。 |
+| `GROK_RESPONSES_REASONING_EFFORT` | `responsesReasoningEffort` | 否 | Responses | 默认 `low`。 |
+| `GROK_RESPONSES_ALLOWED_DOMAINS` | `responsesAllowedDomains` | 否 | Responses | 逗号分隔 domain allow-list，最多 5 个；与 excluded 互斥。 |
+| `GROK_RESPONSES_EXCLUDED_DOMAINS` | `responsesExcludedDomains` | 否 | Responses | 逗号分隔 domain deny-list，最多 5 个；与 allowed 互斥。 |
+| `GROK_RESPONSES_INCLUDE_X_SEARCH` | `responsesIncludeXSearch` | 否 | Responses | 是否启用 direct xAI `x_search`。默认 `false`。 |
+| `GROK_RESPONSES_ALLOWED_X_HANDLES` | `responsesAllowedXHandles` | 否 | Responses | X handle allow-list；与 excluded 互斥。 |
+| `GROK_RESPONSES_EXCLUDED_X_HANDLES` | `responsesExcludedXHandles` | 否 | Responses | X handle deny-list；与 allowed 互斥。 |
+| `GROK_RESPONSES_OPENROUTER_ENGINE` | `responsesOpenRouterEngine` | 否 | OpenRouter Responses | `auto`、`native`、`exa`、`firecrawl`、`parallel` 或 `perplexity`。默认 `auto`。 |
+| `GROK_RESPONSES_FALLBACK_CHAT` | `responsesFallbackChat` | 否 | Responses | Responses 失败后是否显式回退 Chat。默认 `false`。 |
+| `GROK_DEFAULT_EXTRA` | `defaultExtra` | 否 | `search.js` | 配置 Tavily 或 Firecrawl 后的默认 extra source 数量。默认 `5`。 |
+| `GROK_SOURCE_CHARS` | `sourceChars` | 否 | `search.js` | 每条 source stdout snippet 长度。默认 `400`；`0` 表示不输出 snippet。 |
+| `TAVILY_API_KEY` | `tavilyApiKey` | 否 | `search.js`、`fetch.js`、`map.js` | 启用 Tavily Search / Extract / Map。没有它时，`fetch.js` 和 `map.js` 会走 direct fallback。 |
+| `TAVILY_API_URL` | `tavilyApiUrl` | 否 | Tavily 路径 | 默认 `https://api.tavily.com`。 |
+| `FIRECRAWL_API_KEY` | `firecrawlApiKey` | 否 | `search.js`、`fetch.js` | 启用 Firecrawl Scrape fallback 和额外搜索信源。 |
+| `FIRECRAWL_API_URL` | `firecrawlApiUrl` | 否 | Firecrawl 路径 | 默认 `https://api.firecrawl.dev/v2`。 |
+| `GROK_OUTPUT_DIR` | `outputDir` | 否 | 所有脚本 | 覆盖长输出落盘目录。默认 `~/.cache/grok-search/outputs/`。 |
+| `GROK_DEBUG` | — | 否 | 所有脚本 | 仅环境变量。设为 `true` 时把重试 / 清理 / 代理调试日志写到 stderr。 |
+| `GROK_PROXY` | — | 否 | 所有脚本 | 仅环境变量。显式代理 URL，或设为 `off` / `direct` 禁用代理。 |
 
-If `GROK_API_URL` contains `openrouter`, the model automatically gets `:online` unless it already has that suffix.
+Chat 模式下，如果 provider 是 OpenRouter，模型名会自动追加 `:online`，除非模型名已经有这个后缀。Responses 模式使用 `openrouter:web_search` server tool，不会自动追加 `:online`。
 
-## Output Schema
+## 输出 schema
 
-This version uses command-native JSON output. This is a **breaking change** from the older `ok`/`kind` style envelope.
+当前版本使用命令原生 JSON 输出。这是相对旧版 `ok` / `kind` envelope 的 **breaking change**。
 
-On failure, every script returns:
+失败时每个脚本都会返回：
 
 ```json
 {
@@ -117,7 +135,7 @@ On failure, every script returns:
 }
 ```
 
-On success, provider attempts, warnings, timestamps, and command options live under `diagnostics`.
+成功时，provider attempts、warnings、时间戳和命令选项都放在 `diagnostics` 下。
 
 ## Search
 
@@ -128,19 +146,27 @@ On success, provider attempts, warnings, timestamps, and command options live un
 ./scripts/search.js --no-extra "query"
 ./scripts/search.js --source-chars 200 "query"
 ./scripts/search.js --full-sources "debug provider raw"
+./scripts/search.js --search-mode responses "query needing stronger citations"
+./scripts/search.js --search-mode responses --responses-openrouter-engine exa "strict web-only query"
+./scripts/search.js --search-mode responses --responses-x-search --responses-allowed-x-handles xai,OpenAI "query"
+./scripts/search.js --search-mode responses --fallback-chat "query"
 ```
 
-`search.js` calls `{GROK_API_URL}/chat/completions` with `stream:false`, injects local time context, and returns:
+`search.js` 默认使用 `chat` 模式，以 `stream:false` 调用 `{GROK_API_URL}/chat/completions`，注入本地时间上下文，并返回：
 
-- `answer.text`, `answer.chars`, `answer.original_chars`, `answer.truncated`, `answer.full_path`
-- `sources.grok`, `sources.extra`, and `sources.merged` compact source cards
-- `sources.raw_path` when full source/provider raw data is stored on disk
-- `sources.raw` only when `--full-sources` is used
-- `diagnostics.warnings`, `diagnostics.provider_attempts`, `diagnostics.options`, and `diagnostics.searched_at`
+- `answer.text`、`answer.chars`、`answer.original_chars`、`answer.truncated`、`answer.full_path`
+- `sources.grok`、`sources.extra`、`sources.merged` 短 source card
+- `sources.raw_path`，在完整 source / provider raw 落盘时出现
+- `sources.raw`，仅在使用 `--full-sources` 时出现
+- `diagnostics.grok_endpoint`、`diagnostics.warnings`、`diagnostics.provider_attempts`、`diagnostics.options`、`diagnostics.searched_at`
 
-If Tavily or Firecrawl is configured, search automatically adds a small extra source set by default. Without those keys, default search stays quiet and returns only Grok answer/sources. Extra sources are supplemental candidates; they do not rewrite the Grok answer.
+可选 `responses` 模式会调用 `{GROK_API_URL}/responses` 并启用 provider 的 server-side web search tool。它通常能返回更多 citation / searched source 结构，但成本可能明显高于 Chat，因此不会作为默认模式。Responses 模式会在 `diagnostics.options.search_mode`、`diagnostics.grok_endpoint`、`diagnostics.responses_*`、`diagnostics.cost_in_usd_ticks` 和 `diagnostics.cost_usd` 中暴露实际路径与费用信息。
 
-Source cards intentionally do not include long `description` or `content` fields. They use short `snippet` fields, with full raw data available through `sources.raw_path`.
+如果配置了 Tavily 或 Firecrawl，search 默认会自动补充小规模 extra sources；如果没有这些 key，默认 search 会保持安静，只返回 Grok answer / sources。Extra sources 是候选补充信源，不会改写 Grok 的回答。
+
+本项目没有正式 `both` 模式。需要对比 Chat 与 Responses 时，请分别运行两次命令并自行比较输出。
+
+Source card 不再输出长 `description` 或 `content` 字段，只输出短 `snippet`。完整 raw 数据可通过 `sources.raw_path` 按需读取。
 
 ## Fetch
 
@@ -149,21 +175,21 @@ Source cards intentionally do not include long `description` or `content` fields
 ./scripts/fetch.js --provider direct https://example.com
 ```
 
-Default fetch output is a 12,000-character preview. Use `--max-chars 50000` only for an explicit deep read after the preview is useful.
+fetch 默认只返回 12,000 字符 preview。`--max-chars 50000` 应作为看过 preview 后的显式深读使用，不是常规默认。
 
 ```bash
 ./scripts/fetch.js --max-chars 50000 https://example.com
 ```
 
-Provider order for `--provider auto`:
+`--provider auto` 的 provider 顺序：
 
 ```text
 Tavily Extract -> Firecrawl Scrape -> Direct Fetch
 ```
 
-Direct Fetch is a best-effort fallback for normal HTTP(S) text pages. It strips simple HTML, formats JSON when possible, records redirects, and rejects binary/attachment/oversized responses.
+Direct Fetch 是普通 HTTP(S) 文本页面的 best-effort fallback。它会做简单 HTML 清理、尽量格式化 JSON、记录重定向，并拒绝二进制 / 附件 / 超大响应。
 
-Successful fetch output uses `content.text`, `content.chars`, `content.original_chars`, `content.truncated`, and `content.full_path`, with provider details under `diagnostics`.
+fetch 成功输出使用 `content.text`、`content.chars`、`content.original_chars`、`content.truncated`、`content.full_path`，provider 相关信息放在 `diagnostics`。
 
 ## Map
 
@@ -173,45 +199,46 @@ Successful fetch output uses `content.text`, `content.chars`, `content.original_
 ./scripts/map.js https://docs.example.com --instructions "only API reference pages" --max-depth 2
 ```
 
-Provider order for `--provider auto`:
+`--provider auto` 的 provider 顺序：
 
 ```text
 Tavily Map -> Direct Map
 ```
 
-Without `TAVILY_API_KEY`, Tavily Map is unavailable and `map.js` falls back to Direct Map. Direct Map only checks same-site `/sitemap.xml`, then same-domain links on the homepage. It ignores `--instructions` and supports only `--max-depth 1`.
+没有 `TAVILY_API_KEY` 时，Tavily Map 不可用，`map.js` 会 fallback 到 Direct Map。Direct Map 只检查同站点 `/sitemap.xml`，然后提取首页同域名链接。它会忽略 `--instructions`，且只支持 `--max-depth 1`。
 
-Successful map output uses `urls` for discovered URLs. Provider, response time, ignored instructions, warnings, attempts, and options live under `diagnostics`.
+map 成功输出使用 `urls` 表示发现的 URL。provider、response time、ignored instructions、warnings、attempts 和 options 都放在 `diagnostics`。
 
-## Output Files
+## 输出文件
 
-All scripts keep stdout as complete JSON. Long text fields are returned as previews, and the full content is written to:
+所有脚本都会保证 stdout 是完整 JSON。长文本字段会以 preview 形式返回，完整内容写入：
 
 ```text
 ~/.cache/grok-search/outputs/
 ```
 
-Set `GROK_OUTPUT_DIR` to override this path. Each run performs best-effort cleanup of `grok-search-*` files older than 30 days inside the output directory.
+设置 `GROK_OUTPUT_DIR` 可以覆盖该路径。每次运行都会 best-effort 清理输出目录中超过 30 天的 `grok-search-*` 文件。
 
-Read these paths only when the preview is not enough:
+只有 preview 不够时才读取这些路径：
 
-- `answer.full_path` for full search answers
-- `content.full_path` for full fetched page text
-- `sources.raw_path` for full source/provider raw data
+- `answer.full_path`：完整 search answer
+- `content.full_path`：完整 fetch 页面正文
+- `sources.raw_path`：完整 source / provider raw 数据
 
 ## Smoke Tests
 
-No key required:
+不需要 key：
 
 ```bash
 ./scripts/fetch.js --provider direct https://example.com
 ./scripts/map.js --provider direct https://example.com --limit 5
 node tests/sources.test.js
 node tests/proxy.test.js
+node tests/responses.test.js
 node tests/argv.test.js
 ```
 
-Search requires Grok configuration:
+搜索需要 Grok 配置：
 
 ```bash
 export GROK_API_URL="https://your-openai-compatible-endpoint/v1"
@@ -219,43 +246,43 @@ export GROK_API_KEY="your-key"
 ./scripts/search.js "What changed in the latest Node.js LTS?"
 ```
 
-## Common Errors
+## 常见错误
 
-- `GROK_API_URL 未配置`: set `GROK_API_URL` before using `search.js`.
-- `GROK_API_KEY 未配置`: set `GROK_API_KEY` before using `search.js`.
-- `TAVILY_API_KEY 未配置`: explicit `--provider tavily` was requested without a Tavily key.
-- Direct Fetch returns binary/attachment errors: the URL is not a text page or is too large for the direct fallback.
-- Direct Map returns few or zero URLs: the site may rely on JavaScript, hide links, or have no public sitemap.
+- `GROK_API_URL 未配置`：使用 `search.js` 前需要设置 `GROK_API_URL`。
+- `GROK_API_KEY 未配置`：使用 `search.js` 前需要设置 `GROK_API_KEY`。
+- `TAVILY_API_KEY 未配置`：显式请求了 `--provider tavily`，但没有配置 Tavily key。
+- Direct Fetch 返回二进制 / 附件错误：目标 URL 不是文本页面，或对 direct fallback 来说太大。
+- Direct Map 返回很少或 0 个 URL：站点可能依赖 JavaScript、隐藏链接，或没有公开 sitemap。
 
-## Scope
+## 项目边界
 
-First-version scope includes:
+当前范围包括：
 
 - `search.js`
 - `search.js --extra N`
-- `fetch.js` with Direct Fetch fallback
-- `map.js` with Direct Map fallback
-- long-output previews and full-output files
+- 带 Direct Fetch fallback 的 `fetch.js`
+- 带 Direct Map fallback 的 `map.js`
+- 长输出 preview 和完整输出文件
 - `SKILL.md`
 - `references/planning.md`
-- smoke/fixture tests
+- smoke / fixture tests
 
-Out of scope:
+不在范围内：
 
-- Browser rendering
-- PDF/image/archive parsing
-- Cookies, login, or anti-bot bypass
-- MCP server state such as `get_sources`
-- CLI packaging or build steps
+- 浏览器渲染
+- PDF / 图片 / 压缩包解析
+- Cookie、登录或反爬绕过
+- MCP 会话状态，例如 `get_sources`
+- CLI 打包或 build 流程
 
-## Acknowledgements And Origin
+## 致谢与来源
 
-This project is based on and adapted from [GuDaStudio/GrokSearch](https://github.com/GuDaStudio/GrokSearch/), a Python / MCP Grok Search server.
+本项目参考并改造自 [GuDaStudio/GrokSearch](https://github.com/GuDaStudio/GrokSearch/)：一个基于 Python / MCP 的 Grok Search server。
 
-Thanks to GuDaStudio for the original project and design. This project keeps the core search/fetch/site-map ideas, then rewrites them as **plain JS, directly runnable scripts** for agent skill distribution.
+感谢 GuDaStudio 提供原始项目与思路。本项目在保留核心搜索 / 抓取 / 站点映射能力的基础上，重写为更适合 agent skill 分发的 **纯 JS、脚本直跑** 形态。
 
-## License
+## 协议
 
-This project is released under the MIT License. See [LICENSE](LICENSE).
+本项目使用 MIT 协议发布，详见 [LICENSE](LICENSE)。
 
-The original project is also MIT-licensed. The original copyright notice is preserved in `LICENSE` to comply with the MIT License.
+原项目同样使用 MIT 协议。我们在 `LICENSE` 中保留了原项目版权声明，以遵守 MIT 协议要求。
