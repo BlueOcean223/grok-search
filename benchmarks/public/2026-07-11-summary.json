@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "benchmark_date": "2026-07-11",
+  "scope": "Sanitized aggregate sample. Raw responses, private endpoints, relay identity, request IDs, and page-content caches are intentionally excluded.",
+  "task_count": 15,
+  "results": [
+    {
+      "system": "grok_responses_official",
+      "fully_correct": 15,
+      "exact_field_accuracy": 1,
+      "official_hit_at_5": 1,
+      "evidence_coverage": 0.796,
+      "avg_duration_seconds": 36.8,
+      "total_reported_cost_usd": 0.5467
+    },
+    {
+      "system": "brave_raw",
+      "official_hit_at_1": 0.8,
+      "official_hit_at_5": 0.867,
+      "snippet_evidence_coverage": 0.237,
+      "refetched_evidence_coverage": 0.693,
+      "avg_duration_seconds": 1.7
+    },
+    {
+      "system": "tavily_raw",
+      "official_hit_at_1": 0.6,
+      "official_hit_at_5": 0.867,
+      "snippet_evidence_coverage": 0.453,
+      "refetched_evidence_coverage": 0.765,
+      "avg_duration_seconds": 2.8
+    }
+  ]
+}

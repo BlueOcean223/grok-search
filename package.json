@@ -12,6 +12,8 @@
     "fetch": "node scripts/fetch.js",
     "map": "node scripts/map.js",
     "search": "node scripts/search.js",
+    "benchmark": "node benchmarks/run-responses-15q.mjs",
+    "benchmark:score": "node benchmarks/score-responses-15q.mjs",
     "test": "node tests/sources.test.js && node tests/proxy.test.js && node tests/responses.test.js && node tests/argv.test.js",
     "test:argv": "node tests/argv.test.js",
     "test:sources": "node tests/sources.test.js"

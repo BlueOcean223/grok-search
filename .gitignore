@@ -1,6 +1,8 @@
 # --- 本项目特定忽略 ---
 .agent/          
 repo-references/
+.private/
+benchmarks/results/
 
 # --- 构建产物 ---
 dist/
