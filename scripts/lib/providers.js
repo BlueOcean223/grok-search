@@ -108,6 +108,16 @@ export function authHeaders(apiKey) {
   };
 }
 
+export function firecrawlAuthMode(config) {
+  return config?.firecrawlApiKey ? "api_key" : "keyless";
+}
+
+function firecrawlHeaders(config) {
+  return config?.firecrawlApiKey
+    ? authHeaders(config.firecrawlApiKey)
+    : { "Content-Type": "application/json" };
+}
+
 export async function tavilyExtract(url, config) {
   if (!config.tavilyApiKey) {
     return { ok: false, provider: "tavily", skipped: true, error: "TAVILY_API_KEY 未配置" };
@@ -142,17 +152,14 @@ export async function tavilyExtract(url, config) {
 }
 
 export async function firecrawlScrape(url, config) {
-  if (!config.firecrawlApiKey) {
-    return { ok: false, provider: "firecrawl", skipped: true, error: "FIRECRAWL_API_KEY 未配置" };
-  }
-
   const endpoint = `${config.firecrawlApiUrl.replace(/\/+$/, "")}/scrape`;
+  const authMode = firecrawlAuthMode(config);
   let lastError = "Firecrawl Scrape 返回空内容";
 
   for (let attempt = 0; attempt < config.retryMaxAttempts; attempt += 1) {
     try {
       const data = await requestJson(endpoint, {
-        headers: authHeaders(config.firecrawlApiKey),
+        headers: firecrawlHeaders(config),
         body: {
           url,
           formats: ["markdown"],
@@ -166,7 +173,15 @@ export async function firecrawlScrape(url, config) {
 
       const content = data?.data?.markdown || data?.markdown || "";
       if (content.trim()) {
-        return { ok: true, provider: "firecrawl", content, raw: data, attempts: attempt + 1 };
+        return {
+          ok: true,
+          provider: "firecrawl",
+          auth_mode: authMode,
+          content,
+          raw: data,
+          attempts: attempt + 1,
+          ...(Number.isFinite(data?.data?.metadata?.creditsUsed) ? { credits_used: data.data.metadata.creditsUsed } : {}),
+        };
       }
 
       lastError = "Firecrawl Scrape 返回空内容";
@@ -182,7 +197,7 @@ export async function firecrawlScrape(url, config) {
     }
   }
 
-  return { ok: false, provider: "firecrawl", error: lastError };
+  return { ok: false, provider: "firecrawl", auth_mode: authMode, error: lastError };
 }
 
 function sourceFromTavily(result) {
@@ -237,14 +252,11 @@ export async function tavilySearch(query, limit, config) {
 }
 
 export async function firecrawlSearch(query, limit, config) {
-  if (!config.firecrawlApiKey) {
-    return { ok: false, provider: "firecrawl", skipped: true, error: "FIRECRAWL_API_KEY 未配置", sources: [] };
-  }
-
   const endpoint = `${config.firecrawlApiUrl.replace(/\/+$/, "")}/search`;
+  const authMode = firecrawlAuthMode(config);
   try {
     const data = await requestJson(endpoint, {
-      headers: authHeaders(config.firecrawlApiKey),
+      headers: firecrawlHeaders(config),
       body: { query, limit },
       timeoutMs: 90_000,
       config,
@@ -258,9 +270,16 @@ export async function firecrawlSearch(query, limit, config) {
           ? data.web
           : [];
     const sources = rawResults.map(sourceFromFirecrawl).filter(Boolean);
-    return { ok: true, provider: "firecrawl", sources, raw: data };
+    return {
+      ok: true,
+      provider: "firecrawl",
+      auth_mode: authMode,
+      sources,
+      raw: data,
+      ...(Number.isFinite(data?.creditsUsed) ? { credits_used: data.creditsUsed } : {}),
+    };
   } catch (error) {
-    return { ok: false, provider: "firecrawl", error: error.message, sources: [] };
+    return { ok: false, provider: "firecrawl", auth_mode: authMode, error: error.message, sources: [] };
   }
 }
 
@@ -749,13 +768,6 @@ export async function directFetch(url, options = {}) {
 }
 
 function summarizeFetchFailure(tried, fallback) {
-  if (tried.length && tried.every((item) => item.skipped)) {
-    const providers = tried.map((item) => item.provider);
-    if (providers.includes("tavily") && providers.includes("firecrawl")) {
-      return "配置错误: TAVILY_API_KEY 和 FIRECRAWL_API_KEY 均未配置";
-    }
-  }
-
   const details = tried
     .filter((item) => item.error)
     .map((item) => `${item.provider}: ${item.error}`)
@@ -780,7 +792,14 @@ export async function fetchUrl(url, config, { provider = "auto" } = {}) {
 
   if (provider === "auto" || provider === "firecrawl") {
     const result = await firecrawlScrape(url, config);
-    tried.push({ provider: result.provider, ok: result.ok, skipped: Boolean(result.skipped), error: result.error });
+    tried.push({
+      provider: result.provider,
+      ok: result.ok,
+      skipped: Boolean(result.skipped),
+      error: result.error,
+      auth_mode: result.auth_mode,
+      ...(result.credits_used == null ? {} : { credits_used: result.credits_used }),
+    });
     if (result.ok || provider === "firecrawl") return { ...result, tried };
   }
 

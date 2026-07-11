@@ -1,9 +1,8 @@
 import { authHeaders, requestJson } from "./providers.js";
-import { getLocalTimeContext, platformPrompt } from "./grok.js";
+import { getLocalTimeContext, platformPrompt } from "./context.js";
 import { searchPrompt } from "./prompts.js";
 import { normalizeSourceUrl } from "./sources.js";
-
-const COST_TICK_DIVISOR = 10_000_000_000;
+import { usageDiagnostics } from "./usage.js";
 
 function asArray(value) {
   if (Array.isArray(value)) return value;
@@ -12,11 +11,6 @@ function asArray(value) {
 
 function textField(value) {
   return typeof value === "string" && value.trim() ? value.trim() : "";
-}
-
-function numericField(value) {
-  const parsed = typeof value === "number" ? value : Number.parseFloat(value);
-  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function isPlainObject(value) {
@@ -36,8 +30,10 @@ function inputMessages(query, platform) {
 
 function directWebSearchTool(options) {
   const tool = { type: "web_search" };
-  if (options.allowedDomains.length) tool.allowed_domains = options.allowedDomains;
-  if (options.excludedDomains.length) tool.excluded_domains = options.excludedDomains;
+  const filters = {};
+  if (options.allowedDomains.length) filters.allowed_domains = options.allowedDomains;
+  if (options.excludedDomains.length) filters.excluded_domains = options.excludedDomains;
+  if (Object.keys(filters).length) tool.filters = filters;
   return tool;
 }
 
@@ -52,17 +48,23 @@ function buildDirectResponsesBody(query, options) {
   const tools = [directWebSearchTool(options)];
   if (options.includeXSearch) tools.push(directXSearchTool(options));
 
-  return {
+  const body = {
     model: options.model,
     input: inputMessages(query, options.platform),
     tools,
     max_turns: options.maxTurns,
-    reasoning: {
-      effort: options.reasoningEffort,
-      summary: "concise",
-    },
     stream: false,
   };
+
+  const fixedReasoning420 = /^grok-4\.20(?!.*multi-agent)/i.test(options.model);
+  if (options.reasoningEffort && !/non-reasoning/i.test(options.model) && !fixedReasoning420) {
+    body.reasoning = {
+      effort: options.reasoningEffort,
+      summary: "concise",
+    };
+  }
+
+  return body;
 }
 
 function buildOpenRouterResponsesBody(query, options) {
@@ -209,6 +211,14 @@ function sourceFromValue(value, { sourceType, tool }) {
   };
 }
 
+function citationTool(value, defaultTool) {
+  const url = urlFromObject(value);
+  if (defaultTool === "web_search" && /^https?:\/\/(?:www\.)?(?:x\.com|twitter\.com)\//i.test(url)) {
+    return "x_search";
+  }
+  return defaultTool;
+}
+
 function toolFromCall(item, defaultTool) {
   const raw = textField(item?.tool) || textField(item?.name) || textField(item?.type) || defaultTool;
   if (raw.endsWith("_call")) return raw.slice(0, -"_call".length);
@@ -261,6 +271,9 @@ function extractSearchedSources(data, defaultTool) {
       tool,
       ...(textField(item?.type) ? { type: textField(item.type) } : {}),
       ...(textField(item?.status) ? { status: textField(item.status) } : {}),
+      ...(textField(item?.action?.type) ? { action_type: textField(item.action.type) } : {}),
+      ...(textField(item?.action?.query) ? { query: textField(item.action.query) } : {}),
+      ...(textField(item?.action?.url) ? { url: textField(item.action.url) } : {}),
       source_count: sourceCount,
     });
   }
@@ -271,12 +284,12 @@ function extractSearchedSources(data, defaultTool) {
 function extractCitationSources(data, defaultTool) {
   const sources = [];
   for (const annotation of collectAnnotations(data)) {
-    const source = sourceFromValue(annotation, { sourceType: "citation", tool: defaultTool });
+    const source = sourceFromValue(annotation, { sourceType: "citation", tool: citationTool(annotation, defaultTool) });
     if (source) sources.push(source);
   }
 
   for (const citation of asArray(data?.citations)) {
-    const source = sourceFromValue(citation, { sourceType: "citation", tool: defaultTool });
+    const source = sourceFromValue(citation, { sourceType: "citation", tool: citationTool(citation, defaultTool) });
     if (source) sources.push(source);
   }
 
@@ -307,18 +320,6 @@ function dedupeResponsesSources(citationSources, searchedSources) {
   }
 
   return out;
-}
-
-function usageDiagnostics(data) {
-  const usage = isPlainObject(data?.usage) ? data.usage : {};
-  const costTicks = numericField(usage.cost_in_usd_ticks);
-  const explicitCostUsd = numericField(usage.cost_usd);
-  const costUsd = costTicks == null ? explicitCostUsd : costTicks / COST_TICK_DIVISOR;
-  return {
-    usage,
-    ...(costTicks == null ? {} : { cost_in_usd_ticks: costTicks }),
-    ...(costUsd == null ? {} : { cost_usd: costUsd }),
-  };
 }
 
 export function parseGrokResponses(data, { defaultTool = "web_search" } = {}) {

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
-import { applyChatModelProviderDefaults, inferApiProvider } from "../scripts/lib/config.js";
+import { inferApiProvider } from "../scripts/lib/config.js";
 import { buildResponsesBody, parseGrokResponses } from "../scripts/lib/grok-responses.js";
 
 const baseOptions = {
@@ -19,9 +19,6 @@ const baseOptions = {
 assert.equal(inferApiProvider("https://openrouter.ai/api/v1"), "openrouter");
 assert.equal(inferApiProvider("https://api.x.ai/v1"), "xai");
 assert.equal(inferApiProvider("https://example.com/v1"), "openai-compatible");
-assert.equal(applyChatModelProviderDefaults("x-ai/grok-4.1-fast", { apiProvider: "openrouter" }), "x-ai/grok-4.1-fast:online");
-assert.equal(applyChatModelProviderDefaults("grok-4-fast", { apiProvider: "xai" }), "grok-4-fast");
-
 const directBody = buildResponsesBody(
   "latest docs",
   {
@@ -39,9 +36,30 @@ assert.equal(directBody.max_turns, 2);
 assert.equal(directBody.reasoning.effort, "medium");
 assert.equal(directBody.stream, false);
 assert.deepEqual(directBody.tools, [
-  { type: "web_search", allowed_domains: ["docs.x.ai", "openai.com"] },
+  { type: "web_search", filters: { allowed_domains: ["docs.x.ai", "openai.com"] } },
   { type: "x_search", allowed_x_handles: ["xai", "OpenAI"] },
 ]);
+
+const nonReasoningBody = buildResponsesBody(
+  "latest docs",
+  { ...baseOptions, model: "grok-4.20-0309-non-reasoning" },
+  { apiProvider: "xai" }
+);
+assert.equal(Object.hasOwn(nonReasoningBody, "reasoning"), false);
+
+const fixedReasoningBody = buildResponsesBody(
+  "latest docs",
+  { ...baseOptions, model: "grok-4.20-0309-reasoning" },
+  { apiProvider: "xai" }
+);
+assert.equal(Object.hasOwn(fixedReasoningBody, "reasoning"), false);
+
+const multiAgentBody = buildResponsesBody(
+  "latest docs",
+  { ...baseOptions, model: "grok-4.20-multi-agent-0309" },
+  { apiProvider: "xai" }
+);
+assert.equal(multiAgentBody.reasoning.effort, "low");
 
 const openRouterBody = buildResponsesBody(
   "latest docs",
@@ -156,6 +174,58 @@ assert.deepEqual(
   ]
 );
 assert.equal(openRouterParsed.diagnostics.cost_usd, 0.25);
+
+const xParsed = parseGrokResponses({
+  output: [
+    {
+      type: "x_search_call",
+      status: "completed",
+      action: {
+        type: "search",
+        query: "from:xai grok 4.5",
+        sources: [{ type: "url", url: "https://x.com/xai/status/123" }],
+      },
+    },
+    {
+      type: "web_search_call",
+      status: "completed",
+      action: { type: "open_page", url: "https://docs.x.ai/developers/grok-4-5" },
+    },
+    {
+      type: "message",
+      content: [
+        {
+          type: "output_text",
+          text: "X-backed answer.",
+          annotations: [{ type: "url_citation", url: "https://x.com/xai/status/123", title: "1" }],
+        },
+      ],
+    },
+  ],
+});
+
+assert.equal(xParsed.sources.length, 1);
+assert.equal(xParsed.sources[0].tool, "x_search");
+assert.equal(xParsed.diagnostics.responses_web_search_calls, 1);
+assert.equal(xParsed.diagnostics.responses_x_search_calls, 1);
+assert.deepEqual(xParsed.diagnostics.responses_tool_calls, [
+  {
+    tool: "x_search",
+    type: "x_search_call",
+    status: "completed",
+    action_type: "search",
+    query: "from:xai grok 4.5",
+    source_count: 1,
+  },
+  {
+    tool: "web_search",
+    type: "web_search_call",
+    status: "completed",
+    action_type: "open_page",
+    url: "https://docs.x.ai/developers/grok-4-5",
+    source_count: 0,
+  },
+]);
 
 const missing = parseGrokResponses({});
 assert.equal(missing.text, "");

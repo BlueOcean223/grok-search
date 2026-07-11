@@ -13,7 +13,7 @@ Fetch a web page as readable text/Markdown using Tavily Extract, Firecrawl Scrap
 Environment:
   TAVILY_API_KEY       Tavily key used by the primary provider
   TAVILY_API_URL       Default: https://api.tavily.com
-  FIRECRAWL_API_KEY    Firecrawl key used as fallback
+  FIRECRAWL_API_KEY    Optional Firecrawl key; keyless fallback works without it
   FIRECRAWL_API_URL    Default: https://api.firecrawl.dev/v2
   GROK_OUTPUT_DIR      Optional directory for full content when preview is truncated
   GROK_RETRY_*         Retry tuning shared with grok-search scripts
@@ -87,6 +87,7 @@ async function publicResult(args, result, config) {
   const fetchedAt = new Date().toISOString();
   const diagnostics = {
     provider: result.provider,
+    ...(result.auth_mode ? { firecrawl_auth_mode: result.auth_mode } : {}),
     warnings,
     provider_attempts: result.tried || [],
     options: {

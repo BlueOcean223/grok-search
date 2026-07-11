@@ -10,19 +10,17 @@ export class ConfigError extends Error {
   }
 }
 
-const DEFAULT_MODEL = "grok-4-fast";
-const DEFAULT_EXTRA = 5;
+const DEFAULT_MODEL = "grok-4.3";
+const DEFAULT_EXTRA = 6;
 const DEFAULT_SOURCE_CHARS = 400;
 const DEFAULT_TAVILY_API_URL = "https://api.tavily.com";
 const DEFAULT_FIRECRAWL_API_URL = "https://api.firecrawl.dev/v2";
 const DEFAULT_OUTPUT_DIR = path.join(homedir(), ".cache", "grok-search", "outputs");
 const DEFAULT_OUTPUT_RETENTION_DAYS = 30;
-const DEFAULT_SEARCH_MODE = "chat";
-const DEFAULT_RESPONSES_MAX_TURNS = 1;
+const DEFAULT_RESPONSES_MAX_TURNS = 3;
 const DEFAULT_RESPONSES_REASONING_EFFORT = "low";
 const DEFAULT_RESPONSES_OPENROUTER_ENGINE = "auto";
 const API_PROVIDERS = new Set(["xai", "openrouter", "openai-compatible"]);
-const SEARCH_MODES = new Set(["chat", "responses"]);
 const OPENROUTER_SEARCH_ENGINES = new Set(["auto", "native", "exa", "firecrawl", "parallel", "perplexity"]);
 
 function env(name) {
@@ -128,13 +126,6 @@ function resolveUserPath(value) {
   return value;
 }
 
-export function applyOpenRouterOnlineSuffix(model, grokApiUrl) {
-  if (isOpenRouterProvider(undefined, grokApiUrl) && !model.includes(":online")) {
-    return `${model}:online`;
-  }
-  return model;
-}
-
 export function inferApiProvider(grokApiUrl) {
   const normalized = String(grokApiUrl || "").toLowerCase();
   if (normalized.includes("openrouter")) return "openrouter";
@@ -148,12 +139,6 @@ export function normalizeApiProvider(value, grokApiUrl) {
   throw new ConfigError(`GROK_API_PROVIDER 必须是: ${[...API_PROVIDERS].join(", ")}`, "GROK_API_PROVIDER_INVALID");
 }
 
-export function normalizeSearchMode(value) {
-  const mode = String(value || DEFAULT_SEARCH_MODE).trim().toLowerCase();
-  if (SEARCH_MODES.has(mode)) return mode;
-  throw new ConfigError(`GROK_SEARCH_MODE 必须是: ${[...SEARCH_MODES].join(", ")}`, "GROK_SEARCH_MODE_INVALID");
-}
-
 export function normalizeOpenRouterSearchEngine(value) {
   const engine = String(value || DEFAULT_RESPONSES_OPENROUTER_ENGINE).trim().toLowerCase();
   if (OPENROUTER_SEARCH_ENGINES.has(engine)) return engine;
@@ -161,17 +146,6 @@ export function normalizeOpenRouterSearchEngine(value) {
     `GROK_RESPONSES_OPENROUTER_ENGINE 必须是: ${[...OPENROUTER_SEARCH_ENGINES].join(", ")}`,
     "GROK_RESPONSES_OPENROUTER_ENGINE_INVALID"
   );
-}
-
-export function isOpenRouterProvider(apiProvider, grokApiUrl) {
-  return apiProvider === "openrouter" || (!apiProvider && String(grokApiUrl || "").toLowerCase().includes("openrouter"));
-}
-
-export function applyChatModelProviderDefaults(model, config) {
-  if (isOpenRouterProvider(config?.apiProvider, config?.grokApiUrl) && !model.includes(":online")) {
-    return `${model}:online`;
-  }
-  return model;
 }
 
 export async function loadConfig({ requireGrok = false } = {}) {
@@ -209,8 +183,6 @@ export async function loadConfig({ requireGrok = false } = {}) {
     grokApiKey,
     apiProvider,
     grokModel: configuredModel,
-    searchMode: envOrFile("GROK_SEARCH_MODE", fileConfig, ["GROK_SEARCH_MODE", "searchMode", "search_mode"], DEFAULT_SEARCH_MODE),
-
     responsesMaxTurns: envOrFileInt(
       "GROK_RESPONSES_MAX_TURNS",
       fileConfig,
@@ -255,12 +227,6 @@ export async function loadConfig({ requireGrok = false } = {}) {
       ["GROK_RESPONSES_OPENROUTER_ENGINE", "responsesOpenRouterEngine", "responses_openrouter_engine"],
       DEFAULT_RESPONSES_OPENROUTER_ENGINE
     ),
-    responsesFallbackChat: envOrFileBool("GROK_RESPONSES_FALLBACK_CHAT", fileConfig, [
-      "GROK_RESPONSES_FALLBACK_CHAT",
-      "responsesFallbackChat",
-      "responses_fallback_chat",
-    ], false),
-
     tavilyApiUrl: envOrFile("TAVILY_API_URL", fileConfig, ["TAVILY_API_URL", "tavilyApiUrl", "tavily_api_url"], DEFAULT_TAVILY_API_URL),
     tavilyApiKey: envOrFile("TAVILY_API_KEY", fileConfig, ["TAVILY_API_KEY", "tavilyApiKey", "tavily_api_key"]),
 
