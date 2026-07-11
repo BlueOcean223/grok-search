@@ -25,10 +25,8 @@ Do not chain map → fetch → search by default. Run the fewest commands that a
 ./scripts/search.js --extra 10 "query"
 ./scripts/search.js --no-extra "query"
 ./scripts/search.js --source-chars 200 "query"
-./scripts/search.js --search-mode responses "query needing stronger citations"
-./scripts/search.js --search-mode responses --responses-openrouter-engine exa "strict web-only query"
-./scripts/search.js --search-mode responses --responses-x-search --responses-allowed-x-handles xai,OpenAI "query"
-./scripts/search.js --search-mode responses --fallback-chat "query"
+./scripts/search.js --responses-openrouter-engine exa "strict web-only query"
+./scripts/search.js --responses-x-search --responses-allowed-x-handles xai,OpenAI "query"
 ```
 
 ```bash
@@ -44,9 +42,9 @@ Use `./scripts/fetch.js --max-chars 50000 URL` only for an explicit deep read af
 ./scripts/map.js https://docs.example.com --instructions "only API reference pages" --max-depth 2
 ```
 
-When `TAVILY_API_KEY` or `FIRECRAWL_API_KEY` is configured, `search.js` automatically adds a small extra source set by default. Add `--extra 10` only when the user wants a broader candidate-source sweep alongside Grok's answer. The Grok answer itself does not change — the extras are leads to verify, not citations Grok used.
+Search is Responses-only. It runs Grok Responses alongside independent Tavily and Firecrawl searches. Tavily is used when its key is configured; Firecrawl works keyless and automatically uses `FIRECRAWL_API_KEY` when available. The default combined extra target is 6. Add `--extra 10` only for a broader candidate-source sweep. Extras are never fed into Grok.
 
-Search defaults to `chat` mode. Use `--search-mode responses` only when the task benefits from provider-native citations or stronger source discovery and the higher cost is acceptable. Responses mode keeps Tavily / Firecrawl extra sources separate, does not provide a formal `both` mode, and records the actual endpoint, mode, and any cost fields under `diagnostics`.
+If Grok quota is explicitly exhausted, `search.js` may return a visibly marked degraded answer made from raw Tavily/Firecrawl results. Check `diagnostics.degraded` and `diagnostics.grok_error`. Other Grok failures remain errors. `--no-extra` disables this fallback as well as the external searches.
 
 ## Reading Results
 
@@ -57,7 +55,7 @@ Check in this order:
 - `error` — if present, read `error.message`, `error.code`, `error.preview` if present, and `diagnostics.provider_attempts`. Before retrying, change something: a sharper query, a different `--provider` (fetch/map), or a different `--model` (search). Do not rerun the same command.
 - `diagnostics.warnings` and `diagnostics.provider_attempts` — these tell you which providers were skipped, failed, or produced content.
 - Search success: read `answer.text`, then `sources.merged`. Source cards are short and use `snippet`, not `description` or `content`. Full source/provider raw is in `sources.raw_path`; read it in chunks only when needed.
-- Responses search: inspect `diagnostics.grok_endpoint`, `diagnostics.options.search_mode`, `diagnostics.cost_usd`, and `sources.grok[].source_type` (`citation` vs `searched`) before treating sources as evidence.
+- Search: inspect `diagnostics.grok_endpoint`, `diagnostics.degraded`, `diagnostics.cost_usd`, provider attempts, and `sources.grok[].source_type` (`citation` vs `searched`) before treating sources as evidence.
 - Fetch success: read `content.text`. If `content.truncated` is true and the preview is enough, stop. If more is needed, read `content.full_path` in chunks or rerun once with a deliberate larger `--max-chars`.
 - Map success: read `urls`, choose the best candidates, then fetch only the few URLs you need.
 
@@ -68,7 +66,7 @@ Search and fetch are intentionally separated. Use search to discover and compare
 `fetch.js` provider order for `--provider auto`: Tavily Extract → Firecrawl Scrape → Direct Fetch.
 `map.js` provider order for `--provider auto`: Tavily Map → Direct Map.
 
-For search, missing Tavily/Firecrawl keys simply means no automatic extra sources and no noisy warning. For fetch/map, missing keys mean only direct providers run. The direct providers do not execute JavaScript, log in, use cookies, parse PDFs, or bypass anti-bot. Direct Map only reads `/sitemap.xml` and same-domain homepage links, ignores `--instructions`, and is limited to `--max-depth 1`.
+For search, Tavily requires a key while Firecrawl uses its keyless tier by default. For fetch, missing Tavily means Firecrawl Keyless runs before Direct Fetch. The direct providers do not execute JavaScript, log in, use cookies, parse PDFs, or bypass anti-bot. Direct Map only reads `/sitemap.xml` and same-domain homepage links, ignores `--instructions`, and is limited to `--max-depth 1`.
 
 ## Proxy
 

@@ -1,90 +1,79 @@
 # 功能说明
 
-本文档总结 `grok-search` 当前公开行为。
-
 ## Search
 
-`search.js` 会向配置好的 Grok / OpenAI 兼容 endpoint 请求一个面向搜索的问题回答，并返回结构化 JSON。
-
-示例：
+`search.js` 只使用 Responses API：
 
 ```bash
 ./scripts/search.js "latest Node.js LTS"
 ./scripts/search.js --platform GitHub "pi coding agent search skill"
 ./scripts/search.js --extra 10 "latest AI model release notes"
-./scripts/search.js --no-extra "OpenAI official website"
-./scripts/search.js --search-mode responses "latest official release notes"
+./scripts/search.js --no-extra "only use Grok Responses"
+./scripts/search.js --responses-x-search --responses-allowed-x-handles xai,OpenAI "latest xAI news"
+./scripts/search.js --responses-openrouter-engine exa "latest official release notes"
 ```
 
-Search 输出包括：
+默认 Responses 参数：
 
-- `answer.text`：Grok 回答 preview
-- `sources.grok`：从 Grok 输出中解析出的来源（如果存在）
-- `sources.extra`：可选 Tavily / Firecrawl 补充来源
-- `sources.merged`：去重后的来源列表
-- `diagnostics`：warnings、provider attempts、options、timestamp 等
+- model：`grok-4.3`
+- `max_turns=3`
+- `reasoning.effort=low`
+- xAI/openai-compatible：`web_search`
+- OpenRouter：`openrouter:web_search`
 
-### 搜索模式
+Responses sources 写入 `sources.grok`，可能包含：
 
-Search 支持两个生产模式：
+- `source_type: citation | searched`
+- `tool: web_search | x_search | openrouter:web_search`
 
-- `chat`：默认模式，调用 `/chat/completions`。OpenRouter Chat 兼容路径会自动给模型追加 `:online`。
-- `responses`：显式模式，调用 `/responses` 并启用 provider 的 server-side search tool。OpenRouter Responses 使用 `openrouter:web_search`，不追加 `:online`。
+### 独立补充信源
 
-`responses` 模式默认 `max_turns=1`、`reasoning.effort=low`。它可能返回更多 citation / searched source 结构，也可能明显比 Chat 更贵。费用字段会尽量写入 `diagnostics.cost_in_usd_ticks` 和 `diagnostics.cost_usd`。
+默认还会并行执行：
 
-Responses sources 会进入 `sources.grok`，并带有：
+- Tavily Advanced Search：仅在配置 `TAVILY_API_KEY` 时。
+- Firecrawl Search：默认 Keyless，配置 `FIRECRAWL_API_KEY` 后使用 API key。
 
-- `provider: "grok-responses"`
-- `source_type: "citation"` 或 `"searched"`
-- `tool: "web_search"`、`"x_search"` 或 `"openrouter:web_search"`
+`--extra N` 是两家合计数量，默认 6。两家可用时 `N=6` 分为 3/3，`N=5` 分为 Tavily 3、Firecrawl 2。某一路失败后不追加第二轮补齐请求。
 
-本项目没有正式 `both` 模式。需要对比时分别运行 `chat` 和 `responses`。
+这些来源不会注入 Grok，也不代表 Grok 使用过它们。
 
-### Extra sources
+### 额度降级
 
-配置 Tavily 或 Firecrawl key 后，search 可以附加补充来源。
+Grok 明确额度耗尽且 extra sources 可用时，输出仍成功，但：
 
-Extra sources 是独立参考：
+- `answer.text` 开头有明显警告。
+- 回答正文是 Tavily/Firecrawl 原始标题、URL、摘要列表。
+- `diagnostics.degraded=true`。
+- `diagnostics.grok_error.code=QUOTA_EXHAUSTED`。
+- `sources.grok=[]`。
 
-- 不改写 Grok 的回答。
-- 不注入 Chat prompt。
-- 不注入 Responses prompt。
-- 不代表 Grok 的回答一定参考了它们。
-- 主要用于主 agent 做置信度判断、冲突检测和来源补充。
+`--no-extra` 会禁止这种接管。认证、协议、5xx 和超时错误也不会触发额度降级。
 
 ## Fetch
 
-`fetch.js` 用于抓取某个明确 URL 的可读内容。
-
-示例：
-
 ```bash
 ./scripts/fetch.js https://example.com
+./scripts/fetch.js --provider firecrawl https://example.com
 ./scripts/fetch.js --provider direct https://example.com
 ./scripts/fetch.js --max-chars 50000 https://example.com
 ```
 
-`auto` 模式下 provider 顺序：
+`auto` provider 顺序：
 
 ```text
 Tavily Extract → Firecrawl Scrape → Direct Fetch
 ```
 
-Direct Fetch 是普通 HTTP(S) 文本 / HTML 页面的轻量 fallback。
+Firecrawl 无 key 时走 Keyless；带 key 时自动发送 Bearer token。当前模式写入 `diagnostics.firecrawl_auth_mode`。
 
 ## Map
-
-`map.js` 用于从站点发现候选 URL。
-
-示例：
 
 ```bash
 ./scripts/map.js https://docs.example.com --limit 20
 ./scripts/map.js https://docs.example.com --instructions "only API reference pages" --max-depth 2
 ```
 
-`auto` 模式下 provider 顺序：
+`auto` provider 顺序：
 
 ```text
 Tavily Map → Direct Map
@@ -92,73 +81,28 @@ Tavily Map → Direct Map
 
 Direct Map 只检查 `/sitemap.xml` 和首页同域链接。
 
-## 配置
-
-长期配置推荐放在：
-
-```text
-~/.config/grok-search/config.json
-```
-
-环境变量优先于配置文件，适合 CI 或一次性覆盖。
-
-核心变量：
+## 核心配置
 
 | 变量 | 用途 |
 | --- | --- |
-| `GROK_API_URL` | OpenAI 兼容 base URL |
+| `GROK_API_URL` | 支持 `/responses` 的 base URL |
 | `GROK_API_KEY` | 对应 endpoint 的 API key |
-| `GROK_API_PROVIDER` | `xai`、`openrouter` 或 `openai-compatible`；未配置时按 URL 推断 |
-| `GROK_MODEL` | 默认模型 |
-| `GROK_SEARCH_MODE` | `chat` 或 `responses`；默认 `chat` |
-| `GROK_RESPONSES_MAX_TURNS` | Responses turn 上限；默认 `1` |
-| `GROK_RESPONSES_REASONING_EFFORT` | Responses reasoning effort；默认 `low` |
-| `GROK_RESPONSES_ALLOWED_DOMAINS` | Responses web search domain allow-list，最多 5 个 |
-| `GROK_RESPONSES_EXCLUDED_DOMAINS` | Responses web search domain deny-list，最多 5 个 |
-| `GROK_RESPONSES_INCLUDE_X_SEARCH` | 是否启用 direct xAI `x_search`；默认 `false` |
-| `GROK_RESPONSES_ALLOWED_X_HANDLES` | X handle allow-list |
-| `GROK_RESPONSES_EXCLUDED_X_HANDLES` | X handle deny-list |
-| `GROK_RESPONSES_OPENROUTER_ENGINE` | OpenRouter Responses web search engine；默认 `auto` |
-| `GROK_RESPONSES_FALLBACK_CHAT` | Responses 失败后是否回退 Chat；默认 `false` |
-| `TAVILY_API_KEY` | 启用 Tavily search / extract / map 路径 |
-| `FIRECRAWL_API_KEY` | 启用 Firecrawl search / scrape fallback |
-| `GROK_OUTPUT_DIR` | 完整输出文件目录 |
-| `GROK_PROXY` | 本工具专用代理覆盖 |
+| `GROK_API_PROVIDER` | `xai`、`openrouter` 或 `openai-compatible` |
+| `GROK_MODEL` | 默认 `grok-4.3` |
+| `GROK_RESPONSES_MAX_TURNS` | 默认 `3` |
+| `GROK_RESPONSES_REASONING_EFFORT` | 默认 `low` |
+| `GROK_RESPONSES_ALLOWED_DOMAINS` | Web Search allow-list，最多 5 个 |
+| `GROK_RESPONSES_EXCLUDED_DOMAINS` | Web Search deny-list，最多 5 个 |
+| `GROK_RESPONSES_INCLUDE_X_SEARCH` | 启用 xAI `x_search` |
+| `GROK_RESPONSES_OPENROUTER_ENGINE` | OpenRouter search engine，默认 `auto` |
+| `GROK_DEFAULT_EXTRA` | Tavily/Firecrawl 合计默认数量，默认 `6` |
+| `TAVILY_API_KEY` | Tavily Search/Extract/Map |
+| `FIRECRAWL_API_KEY` | 可选；提高 Firecrawl 限流并使用账户额度 |
+| `GROK_OUTPUT_DIR` | 完整输出目录 |
+| `GROK_PROXY` | 本工具专用代理 |
 
-## 输出文件
+## 输出文件与边界
 
-长输出会在 stdout 中返回 preview。完整内容可能写入配置的输出目录，并通过以下字段引用：
+长输出通过 `answer.full_path`、`content.full_path`、`sources.raw_path` 引用。项目不实现登录、cookie 管理、CAPTCHA 绕过、代理池或本地浏览器自动化。
 
-- `answer.full_path`
-- `content.full_path`
-- `sources.raw_path`
-
-## Diagnostics
-
-`diagnostics` 是公开 JSON 输出的一部分，供 agent 读取。
-
-常用字段：
-
-- `diagnostics.warnings`
-- `diagnostics.provider_attempts`
-- `diagnostics.options`
-- `diagnostics.searched_at`
-- `diagnostics.fetched_at`
-- `diagnostics.mapped_at`
-
-## 当前边界
-
-`grok-search` 目前保持轻量，不执行：
-
-- 浏览器渲染
-- 登录流程
-- cookie 浏览
-- CAPTCHA 处理
-- 反爬绕过
-- 代理轮换
-- PDF 解析
-
-## 相关阅读
-
-- [Responses 模式](responses-mode.md)
-- [架构说明](architecture.md)
+相关阅读：[Responses 搜索协议](responses-mode.md)、[架构说明](architecture.md)。

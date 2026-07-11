@@ -1,68 +1,58 @@
-# Responses 模式
+# Responses 搜索协议
 
-`responses` 是 `search.js` 的可选搜索模式：
+`search.js` 的唯一生产搜索协议是 Responses API：
 
 ```bash
-./scripts/search.js --search-mode responses "query"
+./scripts/search.js "query"
 ```
 
-默认仍然是 `chat`。只有在需要更强的 provider-native citation、更多官方源候选，或需要直接测试 `/responses` 行为时，才建议启用 Responses。
+它不支持 Chat Completions，也没有模式切换或 Chat fallback。
 
-## 成本与默认值
+## Direct xAI / openai-compatible
 
-Responses 可能明显比 Chat 更贵。为了控制成本，默认值是：
-
-- `GROK_SEARCH_MODE=chat`
-- `GROK_RESPONSES_MAX_TURNS=1`
-- `GROK_RESPONSES_REASONING_EFFORT=low`
-- `GROK_RESPONSES_INCLUDE_X_SEARCH=false`
-- `GROK_RESPONSES_FALLBACK_CHAT=false`
-
-如果 provider 返回费用信息，输出会包含：
-
-- `diagnostics.cost_in_usd_ticks`
-- `diagnostics.cost_usd`
-- `diagnostics.usage`
-
-## Provider
-
-`GROK_API_PROVIDER` / `apiProvider` 支持：
+请求发送到：
 
 ```text
-xai
-openrouter
-openai-compatible
+{GROK_API_URL}/responses
 ```
 
-未配置时按 `GROK_API_URL` 推断：
-
-- URL 包含 `openrouter` -> `openrouter`
-- URL 包含 `api.x.ai` -> `xai`
-- 其他 -> `openai-compatible`
-
-## Direct xAI
-
-Direct xAI Responses 使用：
+核心 body：
 
 ```json
 {
+  "model": "grok-4.3",
+  "input": [
+    { "role": "system", "content": "..." },
+    { "role": "user", "content": "..." }
+  ],
   "tools": [{ "type": "web_search" }],
-  "max_turns": 1,
+  "max_turns": 3,
   "reasoning": { "effort": "low", "summary": "concise" },
   "stream": false
 }
 ```
 
-启用 X search：
+域名过滤放在 tool 的 `filters`：
+
+```json
+{
+  "type": "web_search",
+  "filters": { "allowed_domains": ["docs.x.ai"] }
+}
+```
+
+X 搜索：
 
 ```bash
-./scripts/search.js --search-mode responses --responses-x-search "query"
-./scripts/search.js --search-mode responses --responses-x-search --responses-allowed-x-handles xai,OpenAI "query"
+./scripts/search.js --responses-x-search "query"
+./scripts/search.js --responses-x-search --responses-allowed-x-handles xai,OpenAI "query"
 ```
+
+固定推理模型或名称包含 `non-reasoning` 的模型不会发送可配置 reasoning 字段。
 
 ## OpenRouter
 
-OpenRouter Responses 使用 provider-specific tool：
+OpenRouter 使用：
 
 ```json
 {
@@ -75,106 +65,75 @@ OpenRouter Responses 使用 provider-specific tool：
         "max_total_results": 10
       }
     }
-  ],
-  "stream": false
+  ]
 }
 ```
 
-OpenRouter Responses 模式不会自动给模型名追加 `:online`。`GROK_RESPONSES_OPENROUTER_ENGINE` / `--responses-openrouter-engine` 可设为：
+可选 engine：
 
 ```text
 auto | native | exa | firecrawl | parallel | perplexity
 ```
 
-需要严格 web-only 时，优先使用：
-
 ```bash
-./scripts/search.js --search-mode responses --responses-openrouter-engine exa "query"
+./scripts/search.js --responses-openrouter-engine exa "query"
 ```
 
-## Filters
+模型名不会自动追加 `:online`。
 
-Domain filters：
+## Responses sources
 
-```bash
-./scripts/search.js --search-mode responses --responses-allowed-domains openai.com,docs.x.ai "query"
-./scripts/search.js --search-mode responses --responses-excluded-domains reddit.com,facebook.com "query"
-```
+解析器收集：
 
-`allowed_domains` 与 `excluded_domains` 互斥，并且各自最多 5 个。
+- output text annotations 与 top-level citations；
+- `web_search_call`、`x_search_call` 的 action/query/url/source；
+- usage 与费用字段。
 
-X handle filters：
-
-```bash
-./scripts/search.js --search-mode responses --responses-x-search --responses-allowed-x-handles xai,OpenAI "query"
-./scripts/search.js --search-mode responses --responses-x-search --responses-excluded-x-handles noisy_account "query"
-```
-
-`allowed_x_handles` 与 `excluded_x_handles` 互斥。设置 X handle filter 会隐式启用 X search。
-
-## Sources
-
-Responses sources 写入 `sources.grok`，保持现有顶层 schema：
+结果进入 `sources.grok`：
 
 ```json
 {
   "provider": "grok-responses",
   "source_type": "citation",
   "tool": "web_search",
-  "url": "https://example.com",
-  "title": "Example",
-  "snippet": "..."
+  "url": "https://example.com"
 }
 ```
 
-`source_type` 的含义：
+同一 URL 同时是 `citation` 和 `searched` 时，citation 优先。
 
-- `citation`：最终回答 inline citation annotation 或 top-level citation。
-- `searched`：server-side search tool 返回的候选来源。
+## Tavily 与 Firecrawl
 
-同一 URL 同时出现在 `citation` 和 `searched` 时，`citation` 优先。
+它们与 Responses 请求并行，但不进入 `input`：
 
-## Extra Sources
-
-Tavily / Firecrawl extra sources 仍是独立证据通道：
-
-- 不注入 Chat prompt。
-- 不注入 Responses prompt。
-- 不改写 Grok 回答。
-- 不代表 Grok 使用过这些来源。
-
-输出仍然分为：
-
-- `sources.grok`
-- `sources.extra`
-- `sources.merged`
-
-## Fallback
-
-默认情况下，Responses 失败会直接报错：
-
-```bash
-./scripts/search.js --search-mode responses "query"
+```text
+Grok Responses ──────────────┐
+Tavily Search（有 key）───────┼─ sources.merged
+Firecrawl Search（Keyless/key）┘
 ```
 
-显式启用 fallback 后，Responses 失败才会回退 Chat：
+默认合计 6 条；两家可用时 3/3。Firecrawl provider attempt 会包含 `auth_mode`，可能包含 `credits_used`。
 
-```bash
-./scripts/search.js --search-mode responses --fallback-chat "query"
-```
+## 额度错误
 
-回退不会伪装成 Responses 成功。输出会包含：
+只有明确额度信号触发 degraded success：
 
-- `diagnostics.grok_endpoint: "chat/completions"`
-- `diagnostics.requested_grok_endpoint: "responses"`
-- `diagnostics.fallback_chat: true`
-- `diagnostics.responses_error`
-- `diagnostics.options.search_mode: "responses"`
-- `diagnostics.options.actual_search_mode: "chat"`
+- HTTP 402；
+- HTTP 429 且正文包含 quota、credit、balance、billing、rate limit 等信号；
+- `insufficient_quota`、`credits_exhausted` 等错误码。
 
-## 非目标
+降级输出同时包含人类可见警告和结构化 `diagnostics.grok_error`。`--no-extra` 时返回 `GROK_QUOTA_EXHAUSTED`。401/403、404/422、5xx、超时和空响应仍是普通错误。
 
-- 不提供正式 `both` 模式。
-- 不把 Tavily / Firecrawl 结果喂给 Grok。
-- 不把 Responses 设为默认。
-- 不实现长期运行的 deep research。
+## Diagnostics
+
+重点字段：
+
+- `grok_endpoint: responses`
+- `responses_max_turns`
+- `responses_web_search_calls`
+- `responses_x_search_calls`
+- `responses_tool_calls`
+- `extra_allocation`
+- `firecrawl_auth_mode`
+- `degraded` / `grok_error`
+- `usage` / `cost_usd`

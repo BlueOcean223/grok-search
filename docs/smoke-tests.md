@@ -1,76 +1,57 @@
 # Smoke Tests
 
-这些检查需要手动运行，因为真实 provider 调用需要私有 API key。
-
-## 无 key 检查
+## 本地 fixture
 
 ```bash
-node tests/sources.test.js
-node tests/proxy.test.js
-node tests/responses.test.js
-node tests/argv.test.js
+npm test
+```
+
+覆盖 Responses body/解析、三路并发、Keyless/API-key、额度降级、source schema、代理与 fetch/map fallback。
+
+## 无 Grok key
+
+```bash
+./scripts/fetch.js --provider firecrawl https://example.com
 ./scripts/fetch.js --provider direct https://example.com
 ./scripts/map.js --provider direct https://example.com --limit 5
 ```
 
-## 代理传输
+第一条验证 Firecrawl Keyless；输出应含 `diagnostics.firecrawl_auth_mode: keyless`。
 
-设置 `HTTP_PROXY` / `HTTPS_PROXY` 时，脚本应该走代理，并且 stderr 不应出现 undici 警告。
-
-Fetch 检查不需要 key；Search 检查需要 Grok 配置。
-
-```bash
-HTTPS_PROXY=http://127.0.0.1:7890 ./scripts/fetch.js --provider direct https://example.com
-GROK_DEBUG=true HTTPS_PROXY=http://127.0.0.1:7890 ./scripts/search.js "proxy smoke test"
-```
-
-使用 `GROK_PROXY=off` 可以强制直连，用于对照。
-
-## Grok Search
-
-```bash
-export GROK_API_URL="https://your-openai-compatible-endpoint/v1"
-export GROK_API_KEY="your-key"
-export GROK_MODEL="grok-4-fast"
-./scripts/search.js "What changed in the latest Node.js LTS?"
-./scripts/search.js --platform GitHub "pi coding agent search skill"
-```
-
-## Responses Search
-
-Responses 模式需要真实 Grok / OpenRouter 配置。默认仍建议先测 Chat，再显式测 Responses。
-
-Direct xAI：
+## Direct xAI
 
 ```bash
 export GROK_API_PROVIDER="xai"
 export GROK_API_URL="https://api.x.ai/v1"
 export GROK_API_KEY="your-key"
-export GROK_MODEL="grok-4-fast"
-./scripts/search.js --search-mode responses "latest xAI docs"
-./scripts/search.js --search-mode responses --responses-x-search "latest xAI news"
+export GROK_MODEL="grok-4.3"
+
+./scripts/search.js "latest xAI docs"
+./scripts/search.js --responses-x-search "latest xAI news"
+./scripts/search.js --no-extra "only Grok Responses"
 ```
 
-OpenRouter：
+期望：
+
+- `diagnostics.grok_endpoint` 为 `responses`；
+- 默认 `responses_max_turns` 为 3；
+- `sources.grok` 可含 `citation` / `searched`；
+- 默认 extra allocation 在没有 Tavily key 时全部给 Firecrawl。
+
+## OpenRouter
 
 ```bash
 export GROK_API_PROVIDER="openrouter"
 export GROK_API_URL="https://openrouter.ai/api/v1"
 export GROK_API_KEY="your-key"
 export GROK_MODEL="x-ai/grok-4.1-fast"
-./scripts/search.js --search-mode responses "latest OpenAI docs"
-./scripts/search.js --search-mode responses --responses-openrouter-engine exa "latest OpenAI docs"
+
+./scripts/search.js --responses-openrouter-engine exa "latest OpenAI docs"
 ```
 
-期望：
+期望 tool 为 `openrouter:web_search`，模型名没有自动 `:online`。
 
-- `diagnostics.grok_endpoint` 为 `responses`
-- `diagnostics.options.search_mode` 为 `responses`
-- `sources.grok` 可包含 `source_type: "citation"` 或 `"searched"`
-- 如果 provider 返回费用，`diagnostics.cost_usd` 有值
-- Tavily / Firecrawl extra sources 仍在 `sources.extra`，不会注入 Grok prompt
-
-## Extra Sources
+## Tavily + Firecrawl
 
 ```bash
 export TAVILY_API_KEY="tvly-your-key"
@@ -78,45 +59,21 @@ export TAVILY_API_KEY="tvly-your-key"
 ./scripts/search.js --extra 10 "latest pi coding agent docs"
 
 export FIRECRAWL_API_KEY="fc-your-key"
-./scripts/search.js --extra 10 "latest pi coding agent docs"
+./scripts/search.js "latest pi coding agent docs"
 ```
 
-配置 Tavily 或 Firecrawl key 后，默认 search 会自动补充一个小规模 extra source 集合。`--extra 10` 用于更宽的候选来源扫描。Extra sources 是补充参考，不会改写 Grok 的回答。
+默认 `extra=6` 时应分配 Tavily 3 / Firecrawl 3。移除 Firecrawl key 后仍应成功，auth mode 变为 `keyless`。
 
-## Fetch Providers
+## Fetch 主备链
 
 ```bash
-export TAVILY_API_KEY="tvly-your-key"
 ./scripts/fetch.js https://example.com
-
-export FIRECRAWL_API_KEY="fc-your-key"
 ./scripts/fetch.js --provider firecrawl https://example.com
+./scripts/fetch.js --provider direct https://example.com
 ```
 
-## Map Providers
+配置 Tavily 时顺序为 Tavily → Firecrawl → Direct；未配置 Tavily 时 Firecrawl Keyless → Direct。
 
-```bash
-export TAVILY_API_KEY="tvly-your-key"
-./scripts/map.js https://docs.example.com --limit 20
-./scripts/map.js https://docs.example.com --instructions "only API reference pages" --max-depth 2
-```
+## 输出安全
 
-## 期望输出形状
-
-每个非 help 命令都应该向 stdout 写出 JSON。
-
-失败 JSON 应包含：
-
-- `error.message`
-- `error.code`
-- `diagnostics.warnings`
-- `diagnostics.provider_attempts`
-- diagnostics 下的脚本时间戳字段：`diagnostics.fetched_at`、`diagnostics.searched_at` 或 `diagnostics.mapped_at`
-
-成功 JSON 使用各命令自己的字段：
-
-- search：`answer.text`、`sources.merged`、可选 `sources.raw_path`、`diagnostics`
-- fetch：`content.text`、可选 `content.full_path`、`diagnostics`
-- map：`urls`、`diagnostics`
-
-stderr 只应包含简短的人类可读摘要，不得包含 API key。
+所有非 help 命令都应向 stdout 写 JSON。stderr 只放简短摘要，不得包含 API key。额度降级必须在 `answer.text` 和 `diagnostics.grok_error` 两处都可见。
