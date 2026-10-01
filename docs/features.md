@@ -136,6 +136,6 @@ Direct Map 只检查 `/sitemap.xml` 和首页同域链接。
 
 ## 输出文件与边界
 
-长输出通过 `answer.full_path`、`content.full_path` 引用；每次调用的运行记录通过 `sources.raw_path`（search）或 `diagnostics.run_path`（fetch / map）引用。项目不实现登录、cookie 管理、CAPTCHA 绕过、代理池或本地浏览器自动化。
+长输出通过 `answer.full_path`、`content.full_path` 引用；整个 stdout JSON 不超过 45KB（`STDOUT_BUDGET_BYTES`，按 UTF-8 字节算，pi 的 bash 工具只保留最后 50KB），超出时截短 `answer.text` / `content.text` 并写 warning；每次调用的运行记录通过 `sources.raw_path`（search）或 `diagnostics.run_path`（fetch / map）引用。项目不实现登录、cookie 管理、CAPTCHA 绕过、代理池或本地浏览器自动化。
 
 相关阅读：[Responses 搜索协议](responses-mode.md)、[架构说明](architecture.md)。

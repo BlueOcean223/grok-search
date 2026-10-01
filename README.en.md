@@ -298,7 +298,7 @@ Source cards intentionally do not include long `description` or `content` fields
 ./scripts/fetch.js --provider direct https://example.com
 ```
 
-Default fetch output is a 12,000-character preview. Use `--max-chars 50000` only for an explicit deep read after the preview is useful.
+Default fetch output is a 12,000-character preview. Use `--max-chars 50000` only for an explicit deep read after the preview is useful. Whatever `--max-chars` says, the whole JSON output stays under 45KB (pi's bash tool keeps only the last 50KB of output, so an oversized one-line text would be dropped whole): when the text does not fit, `content.text` keeps the beginning, `content.truncated` is true, the full text is in `content.full_path`, and `diagnostics.warnings` says so. Search `answer.text` works the same way.
 
 ```bash
 ./scripts/fetch.js --max-chars 50000 https://example.com

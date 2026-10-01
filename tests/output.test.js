@@ -3,7 +3,15 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { runRecordBase, writeFullOutput, writeRunRecord, writeRunRecordSync } from "../scripts/lib/output.js";
+import {
+  fitTextToStdoutBudget,
+  runRecordBase,
+  STDOUT_BUDGET_BYTES,
+  stdoutBytes,
+  writeFullOutput,
+  writeRunRecord,
+  writeRunRecordSync,
+} from "../scripts/lib/output.js";
 
 const outputDir = await mkdtemp(path.join(tmpdir(), "grok-search-output-test-"));
 const config = { outputDir, outputRetentionDays: 30 };
@@ -57,6 +65,41 @@ try {
   assert.deepEqual(redacted.argv, ["--model", "m", "leak *** here"]);
 } finally {
   process.argv = originalArgv;
+}
+
+// stdout budget: pi's bash keeps the last 50KB in whole lines, so one oversized text line takes
+// everything above it along. CJK is 3 bytes per char and JSON escapes grow quotes and newlines.
+{
+  const text = "中文正文，带\"引号\"和换行\n".repeat(4000);
+  const output = { content: { text, truncated: false }, diagnostics: { warnings: [] } };
+  let calls = 0;
+  const cut = await fitTextToStdoutBudget(output, output.content, "text", async () => {
+    calls += 1;
+    output.content.truncated = true;
+    output.diagnostics.warnings.push("cut");
+  });
+  assert.equal(cut, true);
+  assert.equal(calls, 1);
+  assert.equal(output.content.truncated, true);
+  assert.ok(stdoutBytes(output) <= STDOUT_BUDGET_BYTES);
+  assert.ok(stdoutBytes(output) > STDOUT_BUDGET_BYTES - 64, "keeps as much text as fits");
+  assert.ok(text.startsWith(output.content.text));
+}
+
+// Already within budget: untouched, onCut not called.
+{
+  const output = { answer: { text: "short" } };
+  const cut = await fitTextToStdoutBudget(output, output.answer, "text", async () => assert.fail("onCut"));
+  assert.equal(cut, false);
+  assert.equal(output.answer.text, "short");
+}
+
+// The rest alone exceeds the budget (e.g. --full-sources): cutting would not help, so keep the text.
+{
+  const output = { answer: { text: "x".repeat(500) }, raw: "y".repeat(5000) };
+  const cut = await fitTextToStdoutBudget(output, output.answer, "text", async () => assert.fail("onCut"), 2000);
+  assert.equal(cut, false);
+  assert.equal(output.answer.text.length, 500);
 }
 
 console.log("output fixtures ok");

@@ -107,7 +107,7 @@ Direct Map 刻意保持浅层，不执行 JavaScript，并忽略自然语言过�
 - `degraded` 与 `grok_error`（仅额度降级）
 - `firecrawl_auth_mode: keyless | api_key`
 
-长文本在 stdout 中返回 preview，完整内容按需写入输出目录。每次调用另写一份运行记录（`schema_version: 2`，成功 / 失败 / deadline 都写），search 通过 `sources.raw_path`、fetch / map 通过 `diagnostics.run_path` 引用；`GROK_RUN_LOG=off` 关闭。`grok_tool_calls[].source_count` 是中转挂在每个 call 上的累积值，不能做逐次归因。
+长文本在 stdout 中返回 preview，完整内容按需写入输出目录。preview 先按 `--max-chars`（字符）截，再按 `STDOUT_BUDGET_BYTES`（45KB，整个 JSON 的 UTF-8 字节）截：pi 的 bash 工具只保留最后 50KB 的整行，单行的长正文超限会连同它上面的行一起丢掉；`--full-sources` 时其余字段已超预算，不截。每次调用另写一份运行记录（`schema_version: 2`，成功 / 失败 / deadline 都写），search 通过 `sources.raw_path`、fetch / map 通过 `diagnostics.run_path` 引用；`GROK_RUN_LOG=off` 关闭。`grok_tool_calls[].source_count` 是中转挂在每个 call 上的累积值，不能做逐次归因。
 
 ## Provider 边界
 

@@ -11,7 +11,17 @@ import {
 import { activeFirecrawlCooldown, cooldownSkipMessage } from "./lib/cooldown.js";
 import { startDeadline } from "./lib/deadline.js";
 import { searchGrokResponses } from "./lib/grok-responses.js";
-import { cleanupOutputDir, previewText, printJson, runRecordBase, writeRunRecord, writeRunRecordSync } from "./lib/output.js";
+import {
+  cleanupOutputDir,
+  fitTextToStdoutBudget,
+  previewText,
+  printJson,
+  runRecordBase,
+  STDOUT_BUDGET_BYTES,
+  writeFullOutput,
+  writeRunRecord,
+  writeRunRecordSync,
+} from "./lib/output.js";
 import { SEARCH_BUDGET_TOTAL, SEARCH_BUDGET_X } from "./lib/prompts.js";
 import { firecrawlAuthMode, firecrawlSearch } from "./lib/firecrawl.js";
 import { tavilySearch } from "./lib/tavily.js";
@@ -1013,7 +1023,7 @@ async function publicResult(args, config) {
   };
   if (args.fullSources) sources.raw = rawPayload;
 
-  return {
+  const output = {
     query: args.query,
     platform: args.platform || null,
     model: grok.model,
@@ -1027,6 +1037,23 @@ async function publicResult(args, config) {
     sources,
     diagnostics,
   };
+  // `--max-chars` counts characters; what the agent's shell keeps is bytes of the whole JSON.
+  // With `--full-sources` the raw payload alone can exceed the budget; then nothing is cut.
+  const cut = await fitTextToStdoutBudget(output, output.answer, "text", async () => {
+    output.answer.full_path ??= await writeFullOutput(config, {
+      kind: "search",
+      provider: degraded ? "search-fallback" : "grok-responses",
+      label: args.query,
+      content: grok.answer,
+      extension: "md",
+    });
+    output.answer.truncated = true;
+    warnings.push(
+      `answer.text 只保留开头，让整个输出不超过 ${STDOUT_BUDGET_BYTES / 1024}KB（agent 的 shell 工具会截掉更长的输出）；全文在 answer.full_path，分段读。`
+    );
+  });
+  if (cut) output.answer.chars = output.answer.text.length;
+  return output;
 }
 
 function errorOutput(error, code, diagnostics = {}) {

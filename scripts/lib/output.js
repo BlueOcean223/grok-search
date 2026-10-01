@@ -162,6 +162,47 @@ export async function previewText(config, { kind, provider, label, content, maxC
   };
 }
 
+// Agent shell tools cap what a command may print. pi's bash keeps the last 50KB in whole lines,
+// and our JSON puts each long text on one line, so an oversized text loses that line and every
+// line above it. Stay under the cap with room for a stderr line.
+export const STDOUT_BUDGET_BYTES = 45 * 1024;
+// Room for what `onCut` adds (a warning, a file path) when checking that a cut can fit at all.
+const CUT_RESERVE_BYTES = 1024;
+
+/** Bytes `printJson(value)` writes, including the trailing newline. */
+export function stdoutBytes(value) {
+  return Buffer.byteLength(JSON.stringify(value, jsonReplacer, 2), "utf8") + 1;
+}
+
+/**
+ * Shrink the string at `holder[key]` from the end until `output` prints within `budget` bytes.
+ * `onCut` runs once before shrinking to record where the full text lives (it may write a file and
+ * add a warning). Leaves everything untouched when `output` already fits, or when it would not fit
+ * even with an empty string: cutting would then lose text without saving the rest.
+ * Returns whether it cut.
+ */
+export async function fitTextToStdoutBudget(output, holder, key, onCut, budget = STDOUT_BUDGET_BYTES) {
+  if (stdoutBytes(output) <= budget) return false;
+  const original = String(holder[key] ?? "");
+  holder[key] = "";
+  const fitsEmpty = stdoutBytes(output) + CUT_RESERVE_BYTES <= budget;
+  holder[key] = original;
+  if (!fitsEmpty) return false;
+
+  await onCut();
+  const cut = (chars) => original.slice(0, chars).trimEnd();
+  let fits = 0;
+  let overflows = original.length;
+  while (overflows - fits > 1) {
+    const mid = Math.floor((fits + overflows) / 2);
+    holder[key] = cut(mid);
+    if (stdoutBytes(output) <= budget) fits = mid;
+    else overflows = mid;
+  }
+  holder[key] = cut(fits);
+  return true;
+}
+
 export function jsonReplacer(_key, value) {
   return value === undefined ? undefined : value;
 }

@@ -1,7 +1,17 @@
 #!/usr/bin/env node
 import { loadConfig } from "./lib/config.js";
 import { startDeadline } from "./lib/deadline.js";
-import { cleanupOutputDir, previewText, printJson, runRecordBase, writeRunRecord, writeRunRecordSync } from "./lib/output.js";
+import {
+  cleanupOutputDir,
+  fitTextToStdoutBudget,
+  previewText,
+  printJson,
+  runRecordBase,
+  STDOUT_BUDGET_BYTES,
+  writeFullOutput,
+  writeRunRecord,
+  writeRunRecordSync,
+} from "./lib/output.js";
 import { fetchUrl } from "./lib/providers.js";
 import { assertProxyUsable } from "./lib/proxy.js";
 
@@ -159,6 +169,25 @@ async function publicResult(args, result, config) {
   };
 }
 
+/** `--max-chars` counts characters; what the agent's shell keeps is bytes of the whole JSON. */
+async function fitContentToStdout(config, output, result) {
+  const content = output.content;
+  const cut = await fitTextToStdoutBudget(output, content, "text", async () => {
+    content.full_path ??= await writeFullOutput(config, {
+      kind: "fetch",
+      provider: result.provider,
+      label: output.final_url,
+      content: result.content || "",
+      extension: "md",
+    });
+    content.truncated = true;
+    output.diagnostics.warnings.push(
+      `content.text 只保留开头，让整个输出不超过 ${STDOUT_BUDGET_BYTES / 1024}KB（agent 的 shell 工具会截掉更长的输出）；全文在 content.full_path，分段读。`
+    );
+  });
+  if (cut) content.chars = content.text.length;
+}
+
 function errorOutput(error, code) {
   return {
     error: {
@@ -225,6 +254,7 @@ try {
       record: runRecord(config, args, output, result),
     });
     if (runPath) output.diagnostics.run_path = runPath;
+    if (output.content) await fitContentToStdout(config, output, result);
 
     printJson(output);
     if (output.error) {

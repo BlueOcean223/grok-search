@@ -291,7 +291,7 @@ Source card 不再输出长 `description` 或 `content` 字段，只输出短 `s
 ./scripts/fetch.js --provider direct https://example.com
 ```
 
-fetch 默认只返回 12,000 字符 preview。`--max-chars 50000` 应作为看过 preview 后的显式深读使用，不是常规默认。
+fetch 默认只返回 12,000 字符 preview。`--max-chars 50000` 应作为看过 preview 后的显式深读使用，不是常规默认。不管 `--max-chars` 设多大，整个 JSON 输出都不超过 45KB（pi 的 bash 工具只保留输出最后 50KB，超长的单行正文会整行丢掉）：放不下时 `content.text` 只留开头，`content.truncated` 为 true，全文在 `content.full_path`，`diagnostics.warnings` 里有说明。search 的 `answer.text` 同理。
 
 ```bash
 ./scripts/fetch.js --max-chars 50000 https://example.com
