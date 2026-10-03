@@ -5,7 +5,7 @@ description: Use when the user explicitly asks to search the web, check latest/c
 
 # Grok Search
 
-Node scripts for web search, URL fetch and site mapping. Run `npm install` once. Run scripts from the grok-search root (the directory of this SKILL.md): `cd` there or use absolute paths.
+Node scripts for web search, URL fetch and site mapping. Run `npm install` once in `{baseDir}`, the directory of this SKILL.md.
 
 ## Choose The Script
 
@@ -19,12 +19,12 @@ Run the fewest commands that answer the question; run independent sub-questions 
 ## Commands
 
 ```bash
-./scripts/search.js "plain keywords"
-./scripts/search.js --instructions "what to return, language, what to leave out" "plain keywords"
-./scripts/search.js --responses-allowed-domains github.com "plain keywords"
-./scripts/search.js --source x --x-from-date 2026-07-01 "what people say about ..."
-./scripts/fetch.js https://example.com        # --max-chars 50000 only for a deliberate deep read
-./scripts/map.js https://docs.example.com --limit 20
+{baseDir}/scripts/search.js "plain keywords"
+{baseDir}/scripts/search.js --instructions "what to return, language, what to leave out" "plain keywords"
+{baseDir}/scripts/search.js --responses-allowed-domains github.com "plain keywords"
+{baseDir}/scripts/search.js --source x --x-from-date 2026-07-01 "what people say about ..."
+{baseDir}/scripts/fetch.js https://example.com        # --max-chars 50000 only for a deliberate deep read
+{baseDir}/scripts/map.js https://docs.example.com --limit 20
 ```
 
 Query rules:
