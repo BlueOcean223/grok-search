@@ -49,6 +49,9 @@ decisions are kept in the local-only `.agent/` notes.
   in `--mode json` and is stopped on `agent_settled`, since with the xai provider it does not
   exit by itself. Answers are scored with regexes against gold taken from official sources on
   2026-10-02, which go stale as projects release. `--score-only DIR` rescores a finished run.
+  `--conditions dot,bare,basedir,basedir-short` instead compares how the command examples name
+  the scripts (`./scripts/`, `scripts/`, `{baseDir}/scripts/` with a long or a one-clause
+  definition); the summary counts exit-127 calls, i.e. scripts run from the wrong directory.
 
 ## Grader amendments
 

@@ -115,28 +115,46 @@ const RESEARCH = [
 const SETS = { facts: FACTS, research: RESEARCH };
 let QUESTIONS = FACTS;
 
-const BUDGET_LINE =
-  "- Budget about 2 searches per question. Before a second search, name the gap it closes. Do not carry the previous round's conclusion words into the keywords; for the same X handle, change the gap, not the phrasing.";
+// The budget bullet ends with this sentence in every SKILL.md version; variants swap what precedes it.
+const BUDGET_TAIL = "Do not carry the previous round's conclusion words into the keywords; for the same X handle, change the gap, not the phrasing.";
+const BUDGET_RE = /^- .*Do not carry the previous round's conclusion words.*$/m;
 const PARALLEL_LINE = "Run the fewest commands that answer the question; run independent sub-questions in parallel. Do not chain map → fetch → search.";
+const budget = (text) => (skill) => skill.replace(BUDGET_RE, `- ${text} ${BUDGET_TAIL}`);
+const INTRO_RE = /^Node scripts for web search, URL fetch and site mapping\..*$/m;
+const DOT_INTRO =
+  "Node scripts for web search, URL fetch and site mapping. Run `npm install` once. Run scripts from the grok-search root (the directory of this SKILL.md): `cd` there or use absolute paths.";
+const toDot = (skill) => skill.replaceAll("{baseDir}/scripts/", "./scripts/").replace(INTRO_RE, DOT_INTRO);
 
 const CONDITIONS = {
+  // Budget wordings (2026-10-02). `two` is the text SKILL.md had before; `sub` is what replaced it.
   one: (skill) =>
-    skill
-      .replace(
-        BUDGET_LINE,
-        "- One search per question: put every sub-question into that search's `--instructions` and do not search again. Do not carry the previous round's conclusion words into the keywords; for the same X handle, change the gap, not the phrasing."
-      )
-      .replace(PARALLEL_LINE, "Run the fewest commands that answer the question. Do not chain map → fetch → search."),
-  two: (skill) => skill,
-  gap: (skill) =>
-    skill.replace(
-      BUDGET_LINE,
-      "- Search again only for a gap the previous results left open; name that gap before the search. Do not carry the previous round's conclusion words into the keywords; for the same X handle, change the gap, not the phrasing."
+    budget("One search per question: put every sub-question into that search's `--instructions` and do not search again.")(skill).replace(
+      PARALLEL_LINE,
+      "Run the fewest commands that answer the question. Do not chain map → fetch → search."
     ),
+  two: budget("Budget about 2 searches per question. Before a second search, name the gap it closes."),
+  gap: budget("Search again only for a gap the previous results left open; name that gap before the search."),
+  sub: (skill) => skill,
+  // How the command examples name the scripts (2026-10-03). Each starts from the `./scripts/...`
+  // text SKILL.md had before `basedir-short` was adopted.
+  dot: (skill) => toDot(skill),
+  bare: (skill) => toDot(skill).replaceAll("./scripts/", "scripts/"),
+  basedir: (skill) =>
+    toDot(skill)
+      .replaceAll("./scripts/", "{baseDir}/scripts/")
+      .replace(
+        INTRO_RE,
+        "Node scripts for web search, URL fetch and site mapping. `{baseDir}` below is the directory containing this SKILL.md: replace it with that absolute path so commands work from any working directory. Other paths here (`references/...`) are relative to it too. Run `npm install` in `{baseDir}` once."
+      ),
+  // `basedir` with the definition folded into the npm install sentence, nothing else added.
+  "basedir-short": (skill) =>
+    toDot(skill)
+      .replaceAll("./scripts/", "{baseDir}/scripts/")
+      .replace(INTRO_RE, "Node scripts for web search, URL fetch and site mapping. Run `npm install` once in `{baseDir}`, the directory of this SKILL.md."),
 };
 
 function parseArgs(argv) {
-  const args = { set: "facts", only: null, conditions: Object.keys(CONDITIONS), models: [null], repeat: 1, concurrency: 4, out: null, scoreOnly: null };
+  const args = { set: "facts", only: null, conditions: ["one", "two", "gap"], models: [null], repeat: 1, concurrency: 4, out: null, scoreOnly: null };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--set") args.set = argv[++i];
@@ -157,8 +175,10 @@ function prepareSkill(outDir, condition) {
   const dir = path.join(outDir, "skills", condition, "grok-search");
   mkdirSync(dir, { recursive: true });
   const original = readFileSync(path.join(ROOT, "SKILL.md"), "utf8");
-  if (!original.includes(BUDGET_LINE) || !original.includes(PARALLEL_LINE)) throw new Error("SKILL.md budget lines changed; update the variants");
-  writeFileSync(path.join(dir, "SKILL.md"), CONDITIONS[condition](original));
+  if (!BUDGET_RE.test(original) || !original.includes(PARALLEL_LINE) || !INTRO_RE.test(original)) throw new Error("SKILL.md lines the variants rewrite have changed; update the variants");
+  const variant = CONDITIONS[condition](original);
+  if (variant === original && ["one", "two", "gap"].includes(condition)) throw new Error(`condition ${condition} left SKILL.md unchanged`);
+  writeFileSync(path.join(dir, "SKILL.md"), variant);
   for (const name of ["scripts", "references", "node_modules", "package.json"]) {
     const link = path.join(dir, name);
     if (!existsSync(link)) symlinkSync(path.join(ROOT, name), link);
@@ -235,7 +255,7 @@ const SCRIPT_RE = /scripts\/(search|fetch|map)\.js/;
 function measure(runDir) {
   const meta = JSON.parse(readFileSync(path.join(runDir, "meta.json"), "utf8"));
   const answer = readFileSync(path.join(runDir, "answer.txt"), "utf8");
-  const calls = { search: 0, fetch: 0, map: 0, failed: 0 };
+  const calls = { search: 0, fetch: 0, map: 0, failed: 0, exit127: 0 };
   let agentCost = 0;
   let model = null;
   const sessionDir = path.join(runDir, "session");
@@ -258,6 +278,7 @@ function measure(runDir) {
       if (m?.role === "toolResult" && pending.has(m.toolCallId)) {
         const text = (m.content || []).map((c) => c.text ?? "").join("");
         if (/exited with code [1-9]/.test(text)) calls.failed += 1;
+        if (/exited with code 127/.test(text)) calls.exit127 += 1;
       }
     }
   }
@@ -291,6 +312,7 @@ function summarize(results) {
       searches: sum((r) => r.search_records),
       fetches: sum((r) => r.calls.fetch),
       failed_calls: sum((r) => r.calls.failed),
+      exit127: sum((r) => r.calls.exit127 ?? 0),
       grok_cost: +sum((r) => r.grok_cost).toFixed(3),
       agent_cost: +sum((r) => r.agent_cost).toFixed(3),
       median_wall_s: Math.round(rs.map((r) => r.wall_ms).sort((a, b) => a - b)[Math.floor(rs.length / 2)] / 1000),
