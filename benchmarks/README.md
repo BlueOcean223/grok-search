@@ -40,6 +40,15 @@ decisions are kept in the local-only `.agent/` notes.
   (`--only web|x --ids a,b --repeat N`). Result: `max_tool_calls` is ignored by api.x.ai and by
   relays; `parallel_tool_calls: false` gives one call per turn; the model matters more than
   either knob.
+- `search-budget-eval.mjs`: questions answered by a pi agent under three variants of the
+  SKILL.md search budget line (`one` search, about `two`, `gap` rule with no number).
+  `--set facts` has twelve current-fact questions (single fact, two-part, multi-hop, doc detail);
+  `--set research` has six multi-part ones (several versions at once, release-note contents,
+  a tool landscape). `--models a,b` repeats every cell per pi model. Each run gets its own skill
+  copy, session dir and `GROK_OUTPUT_DIR`, so searches and Grok cost are counted per run; pi runs
+  in `--mode json` and is stopped on `agent_settled`, since with the xai provider it does not
+  exit by itself. Answers are scored with regexes against gold taken from official sources on
+  2026-10-02, which go stale as projects release. `--score-only DIR` rescores a finished run.
 
 ## Grader amendments
 
