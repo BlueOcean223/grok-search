@@ -31,7 +31,7 @@ Query rules:
 
 - The query is a keyword string that Tavily/Firecrawl search verbatim, so keep it short. Everything else (fields wanted, language, "quote and date only, no advice, say if not found") goes in `--instructions`; only Grok sees it. A bag of keywords like `GPT Codex 1M 272k context window` makes Grok invent background; `codex context window` plus an instruction asking for the current limit does not.
 - No code-search operators (`repo:`, `path:`, `language:`). Scope with `--responses-allowed-domains`; it restricts Grok, Tavily, and Firecrawl alike, and off-domain leftovers rank last.
-- Budget about 2 searches per question. Before a second search, name the gap it closes. Do not carry the previous round's conclusion words into the keywords; for the same X handle, change the gap, not the phrasing.
+- One search per sub-question is usually enough; to check a claim, fetch its source instead of searching again. Search again only for a gap you can name. Do not carry the previous round's conclusion words into the keywords; for the same X handle, change the gap, not the phrasing.
 
 ## Search Source
 
