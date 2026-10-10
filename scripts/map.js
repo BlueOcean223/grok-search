@@ -1,19 +1,7 @@
 #!/usr/bin/env node
-import { loadConfig } from "./lib/config.js";
-import { startDeadline } from "./lib/deadline.js";
-import { cleanupOutputDir, printJson, runRecordBase, writeRunRecord, writeRunRecordSync } from "./lib/output.js";
+import { parseArgv, runCommand } from "./lib/cli.js";
+import { runRecordBase, writeRunRecord } from "./lib/output.js";
 import { DIRECT_MAP_REQUEST_TIMEOUT_SECONDS, mapUrl } from "./lib/providers.js";
-import { assertProxyUsable } from "./lib/proxy.js";
-
-const DEFAULTS = {
-  provider: "auto",
-  maxDepth: 1,
-  maxBreadth: 20,
-  limit: 50,
-  timeout: 150,
-  directTimeout: DIRECT_MAP_REQUEST_TIMEOUT_SECONDS,
-  instructions: "",
-};
 
 function usage() {
   return `Usage: ./scripts/map.js [--provider auto|tavily|direct] [--instructions TEXT] [--max-depth N] [--max-breadth N] [--limit N] [--timeout SECONDS] [--direct-timeout SECONDS] [--deadline SECONDS] <url>
@@ -32,106 +20,20 @@ Environment:
 `;
 }
 
-function parseIntOption(name, value, { min = 0 } = {}) {
-  if (value == null || value === "") throw new Error(`${name} 缺少数值`);
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isFinite(parsed) || parsed < min) throw new Error(`${name} 必须是 >= ${min} 的整数`);
-  return parsed;
-}
+const OPTIONS = {
+  provider: { flag: "--provider", type: "string", default: "auto", values: ["auto", "tavily", "direct"] },
+  instructions: { flag: "--instructions", type: "string" },
+  maxDepth: { flag: "--max-depth", type: "int", min: 0, default: 1 },
+  maxBreadth: { flag: "--max-breadth", type: "int", min: 1, default: 20 },
+  limit: { flag: "--limit", type: "int", min: 1, default: 50 },
+  // --timeout is Tavily's remote crawl budget; --direct-timeout is per request for Direct Map.
+  timeout: { flag: "--timeout", type: "int", min: 1, default: 150 },
+  directTimeout: { flag: "--direct-timeout", type: "int", min: 1, default: DIRECT_MAP_REQUEST_TIMEOUT_SECONDS },
+  deadline: { flag: "--deadline", type: "int", min: 0 },
+};
 
 function parseArgs(argv) {
-  const args = [...argv];
-  const out = { ...DEFAULTS };
-  let url = "";
-
-  while (args.length) {
-    const arg = args.shift();
-    if (arg === "--help" || arg === "-h") return { help: true };
-    if (arg === "--provider") {
-      out.provider = args.shift() || "";
-      if (!out.provider) throw new Error("--provider 缺少值");
-      continue;
-    }
-    if (arg?.startsWith("--provider=")) {
-      out.provider = arg.slice("--provider=".length);
-      continue;
-    }
-    if (arg === "--instructions") {
-      out.instructions = args.shift() || "";
-      if (!out.instructions) throw new Error("--instructions 缺少值");
-      continue;
-    }
-    if (arg?.startsWith("--instructions=")) {
-      out.instructions = arg.slice("--instructions=".length);
-      continue;
-    }
-    if (arg === "--max-depth") {
-      out.maxDepth = parseIntOption("--max-depth", args.shift(), { min: 0 });
-      continue;
-    }
-    if (arg?.startsWith("--max-depth=")) {
-      out.maxDepth = parseIntOption("--max-depth", arg.slice("--max-depth=".length), { min: 0 });
-      continue;
-    }
-    if (arg === "--max-breadth") {
-      out.maxBreadth = parseIntOption("--max-breadth", args.shift(), { min: 1 });
-      continue;
-    }
-    if (arg?.startsWith("--max-breadth=")) {
-      out.maxBreadth = parseIntOption("--max-breadth", arg.slice("--max-breadth=".length), { min: 1 });
-      continue;
-    }
-    if (arg === "--limit") {
-      out.limit = parseIntOption("--limit", args.shift(), { min: 1 });
-      continue;
-    }
-    if (arg?.startsWith("--limit=")) {
-      out.limit = parseIntOption("--limit", arg.slice("--limit=".length), { min: 1 });
-      continue;
-    }
-    if (arg === "--timeout") {
-      out.timeout = parseIntOption("--timeout", args.shift(), { min: 1 });
-      continue;
-    }
-    if (arg?.startsWith("--timeout=")) {
-      out.timeout = parseIntOption("--timeout", arg.slice("--timeout=".length), { min: 1 });
-      continue;
-    }
-    if (arg === "--direct-timeout") {
-      out.directTimeout = parseIntOption("--direct-timeout", args.shift(), { min: 1 });
-      continue;
-    }
-    if (arg?.startsWith("--direct-timeout=")) {
-      out.directTimeout = parseIntOption("--direct-timeout", arg.slice("--direct-timeout=".length), { min: 1 });
-      continue;
-    }
-    if (arg === "--deadline") {
-      out.deadline = parseIntOption("--deadline", args.shift(), { min: 0 });
-      continue;
-    }
-    if (arg?.startsWith("--deadline=")) {
-      out.deadline = parseIntOption("--deadline", arg.slice("--deadline=".length), { min: 0 });
-      continue;
-    }
-    if (arg?.startsWith("-")) throw new Error(`未知参数: ${arg}`);
-    if (url) throw new Error(`只能提供一个 URL，多余参数: ${arg}`);
-    url = arg;
-  }
-
-  if (!["auto", "tavily", "direct"].includes(out.provider)) {
-    throw new Error("--provider 只能是 auto、tavily 或 direct");
-  }
-  if (!url) throw new Error("缺少 URL");
-
-  let parsed;
-  try {
-    parsed = new URL(url);
-  } catch {
-    throw new Error(`URL 无效: ${url}`);
-  }
-  if (!["http:", "https:"].includes(parsed.protocol)) throw new Error("URL 必须使用 http 或 https 协议");
-
-  return { ...out, url: parsed.toString() };
+  return parseArgv(argv, { options: OPTIONS, positional: { name: "url", type: "url", required: "缺少 URL" } });
 }
 
 function publicResult(args, result, durationMs) {
@@ -175,20 +77,6 @@ function publicResult(args, result, durationMs) {
   };
 }
 
-function errorOutput(error, code) {
-  return {
-    error: {
-      message: error.message,
-      code,
-    },
-    diagnostics: {
-      warnings: [],
-      provider_attempts: [],
-      mapped_at: new Date().toISOString(),
-    },
-  };
-}
-
 function runRecord(config, args, output) {
   return {
     ...runRecordBase("map", config, output.diagnostics.mapped_at),
@@ -204,53 +92,20 @@ function runRecord(config, args, output) {
   };
 }
 
-let stage = "argument";
-let args = null;
-let config = null;
-try {
-  args = parseArgs(process.argv.slice(2));
-  if (args.help) {
-    console.log(usage());
-    process.exit(0);
-  }
-
-  stage = "config";
-  config = await loadConfig({ requireGrok: false });
-  assertProxyUsable();
-  await cleanupOutputDir(config);
-  stage = "map";
-  const deadlineSeconds = args.deadline ?? config.deadlineSeconds;
-  const stopDeadline = startDeadline(deadlineSeconds, () => {
-    const error = new Error(`映射总耗时超过 deadline（>${deadlineSeconds}s），已中止`);
-    const output = errorOutput(error, "DEADLINE_EXCEEDED");
-    const runPath = writeRunRecordSync(config, { kind: "map", label: args.url, record: runRecord(config, args, output) });
-    if (runPath) output.diagnostics.run_path = runPath;
-    printJson(output);
-    console.error(error.message);
-    process.exit(1);
-  });
-  try {
-    const startedAtMs = Date.now();
-    const result = await mapUrl(args.url, config, args);
-    const output = publicResult(args, result, Date.now() - startedAtMs);
-    const runPath = await writeRunRecord(config, { kind: "map", label: args.url, record: runRecord(config, args, output) });
-    if (runPath) output.diagnostics.run_path = runPath;
-    printJson(output);
-    if (output.error) {
-      console.error(output.error.message);
-      process.exitCode = 1;
-    }
-  } finally {
-    stopDeadline();
-  }
-} catch (error) {
-  const code = error.code || (stage === "argument" ? "ARGUMENT_ERROR" : stage === "map" ? "MAP_ERROR" : "RUNTIME_ERROR");
-  const output = errorOutput(error, code);
-  if (config) {
-    const runPath = await writeRunRecord(config, { kind: "map", label: args?.url || "error", record: runRecord(config, args, output) });
-    if (runPath) output.diagnostics.run_path = runPath;
-  }
-  printJson(output);
-  console.error(error.message);
-  process.exitCode = stage === "argument" ? 2 : 1;
+async function mapCommand(args, config) {
+  const startedAtMs = Date.now();
+  const result = await mapUrl(args.url, config, args);
+  const output = publicResult(args, result, Date.now() - startedAtMs);
+  const runPath = await writeRunRecord(config, { kind: "map", label: args.url, record: runRecord(config, args, output) });
+  if (runPath) output.diagnostics.run_path = runPath;
+  return output;
 }
+
+await runCommand({
+  kind: "map",
+  usage,
+  parseArgs,
+  label: (args) => args.url,
+  errorRecord: runRecord,
+  run: mapCommand,
+});

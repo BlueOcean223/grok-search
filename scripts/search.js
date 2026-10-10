@@ -1,33 +1,29 @@
 #!/usr/bin/env node
+import { parseArgv, runCommand } from "./lib/cli.js";
 import {
   ConfigError,
   X_HANDLE_LIMIT,
-  loadConfig,
   normalizeOpenRouterSearchEngine,
   normalizeSearchSource,
   usesWebSearch,
   usesXSearch,
 } from "./lib/config.js";
 import { activeFirecrawlCooldown, cooldownSkipMessage } from "./lib/cooldown.js";
-import { startDeadline } from "./lib/deadline.js";
 import { searchGrokResponses } from "./lib/grok-responses.js";
 import {
-  cleanupOutputDir,
   fitTextToStdoutBudget,
   previewText,
-  printJson,
   runRecordBase,
   runRecordPath,
   STDOUT_BUDGET_BYTES,
   withNotices,
   writeFullOutput,
   writeRunRecord,
-  writeRunRecordSync,
 } from "./lib/output.js";
 import { SEARCH_BUDGET_TOTAL, SEARCH_BUDGET_X } from "./lib/prompts.js";
 import { firecrawlAuthMode, firecrawlSearch } from "./lib/firecrawl.js";
 import { tavilySearch } from "./lib/tavily.js";
-import { assertProxyUsable, getProxyState } from "./lib/proxy.js";
+import { getProxyState } from "./lib/proxy.js";
 import { buildRawSourcesPayload, compactSources, isOffDomainExtra, mergeSources, selectSources } from "./lib/sources.js";
 
 const DEFAULT_MAX_CHARS = 30000;
@@ -84,303 +80,48 @@ Environment:
 `;
 }
 
-function parseIntOption(name, value, { min = 0 } = {}) {
-  if (value == null || value === "") throw new Error(`${name} 缺少数值`);
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isFinite(parsed) || parsed < min) throw new Error(`${name} 必须是 >= ${min} 的整数`);
-  return parsed;
-}
-
-function parseListOption(value) {
-  return String(value || "")
-    .split(",")
-    .map((item) => item.trim())
-    .filter(Boolean);
-}
-
-function parseListArg(name, value) {
-  if (value == null || value === "") throw new Error(`${name} 缺少值`);
-  return parseListOption(value);
-}
-
-function parseDateOption(name, value) {
-  const date = String(value || "").trim();
-  if (!date) throw new Error(`${name} 缺少值`);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error(`${name} 必须是 ISO8601 日期（YYYY-MM-DD）`);
-  // Date.parse rolls overflowing days over (2026-02-30 becomes Mar 2) instead of failing,
-  // so compare the round-trip rather than just checking for NaN.
-  const timestamp = Date.parse(`${date}T00:00:00Z`);
-  if (Number.isNaN(timestamp) || new Date(timestamp).toISOString().slice(0, 10) !== date) {
-    throw new Error(`${name} 不是有效日期: ${date}`);
-  }
-  return date;
-}
+const OPTIONS = {
+  instructions: { flag: "--instructions", type: "string" },
+  platform: { flag: "--platform", type: "string" },
+  model: { flag: "--model", type: "string" },
+  responsesMaxTurns: { flag: "--responses-max-turns", type: "int", min: 1 },
+  responsesParallelToolCalls: { flag: "--responses-parallel-tool-calls", type: "bool" },
+  responsesReasoningEffort: { flag: "--responses-reasoning-effort", type: "string" },
+  responsesAllowedDomains: { flag: "--responses-allowed-domains", type: "list" },
+  responsesExcludedDomains: { flag: "--responses-excluded-domains", type: "list" },
+  // Rejected here so an unknown source fails like every other argument error, before config
+  // load and output-dir cleanup.
+  searchSource: { flag: "--source", type: "string", validate: normalizeSearchSource },
+  // Aliases kept from before --source existed; both mean the "both" mode.
+  xSearchAlias: { flags: ["--responses-x-search", "--responses-include-x-search"], type: "const", target: "searchSource", value: "both" },
+  xFromDate: { flag: "--x-from-date", type: "date" },
+  xToDate: { flag: "--x-to-date", type: "date" },
+  xImageUnderstanding: { flag: "--x-images", off: "--no-x-images", type: "toggle" },
+  xVideoUnderstanding: { flag: "--x-videos", off: "--no-x-videos", type: "toggle" },
+  responsesAllowedXHandles: { flag: "--responses-allowed-x-handles", type: "list" },
+  responsesExcludedXHandles: { flag: "--responses-excluded-x-handles", type: "list" },
+  responsesOpenRouterEngine: { flag: "--responses-openrouter-engine", type: "string" },
+  extra: { flag: "--extra", type: "int", min: 0 },
+  noExtra: { flag: "--no-extra", type: "flag" },
+  sourceChars: { flag: "--source-chars", type: "int", min: 0 },
+  maxSources: { flag: "--max-sources", type: "int", min: 1 },
+  deadline: { flag: "--deadline", type: "int", min: 0 },
+  fullSources: { flag: "--full-sources", type: "flag" },
+  maxChars: { flag: "--max-chars", type: "int", min: 0, default: DEFAULT_MAX_CHARS },
+};
 
 function parseArgs(argv) {
-  const args = [...argv];
-  const queryParts = [];
-  let platform = "";
-  let model = "";
-  let extra = null;
-  let extraMode = "auto";
-  let extraSeen = false;
-  let noExtraSeen = false;
-  let sourceChars = null;
-  let maxSources = null;
-  let fullSources = false;
-  let maxChars = DEFAULT_MAX_CHARS;
-  let deadline = null;
-  let responsesMaxTurns = null;
-  let responsesReasoningEffort = "";
-  let responsesParallelToolCalls = null;
-  let responsesAllowedDomains = null;
-  let responsesExcludedDomains = null;
-  let searchSource = "";
-  let responsesAllowedXHandles = null;
-  let responsesExcludedXHandles = null;
-  let xFromDate = "";
-  let xToDate = "";
-  let xImageUnderstanding = null;
-  let xVideoUnderstanding = null;
-  let responsesOpenRouterEngine = "";
-  let instructions = "";
-
-  while (args.length) {
-    const arg = args.shift();
-    if (arg === "--help" || arg === "-h") return { help: true };
-    if (arg === "--instructions") {
-      instructions = (args.shift() || "").trim();
-      if (!instructions) throw new Error("--instructions 缺少值");
-      continue;
-    }
-    if (arg?.startsWith("--instructions=")) {
-      instructions = arg.slice("--instructions=".length).trim();
-      if (!instructions) throw new Error("--instructions 缺少值");
-      continue;
-    }
-    if (arg === "--platform") {
-      platform = args.shift() || "";
-      if (!platform) throw new Error("--platform 缺少值");
-      continue;
-    }
-    if (arg?.startsWith("--platform=")) {
-      platform = arg.slice("--platform=".length);
-      continue;
-    }
-    if (arg === "--model") {
-      model = args.shift() || "";
-      if (!model) throw new Error("--model 缺少值");
-      continue;
-    }
-    if (arg?.startsWith("--model=")) {
-      model = arg.slice("--model=".length);
-      continue;
-    }
-    if (arg === "--responses-max-turns") {
-      responsesMaxTurns = parseIntOption("--responses-max-turns", args.shift(), { min: 1 });
-      continue;
-    }
-    if (arg?.startsWith("--responses-max-turns=")) {
-      responsesMaxTurns = parseIntOption("--responses-max-turns", arg.slice("--responses-max-turns=".length), { min: 1 });
-      continue;
-    }
-    if (arg === "--responses-parallel-tool-calls" || arg?.startsWith("--responses-parallel-tool-calls=")) {
-      const raw = arg.includes("=") ? arg.slice(arg.indexOf("=") + 1) : args.shift();
-      if (!/^(true|false)$/i.test(String(raw || ""))) throw new Error("--responses-parallel-tool-calls 只能是 true 或 false");
-      responsesParallelToolCalls = /^true$/i.test(raw);
-      continue;
-    }
-    if (arg === "--responses-reasoning-effort") {
-      responsesReasoningEffort = args.shift() || "";
-      if (!responsesReasoningEffort) throw new Error("--responses-reasoning-effort 缺少值");
-      continue;
-    }
-    if (arg?.startsWith("--responses-reasoning-effort=")) {
-      responsesReasoningEffort = arg.slice("--responses-reasoning-effort=".length);
-      continue;
-    }
-    if (arg === "--responses-allowed-domains") {
-      responsesAllowedDomains = parseListArg("--responses-allowed-domains", args.shift());
-      continue;
-    }
-    if (arg?.startsWith("--responses-allowed-domains=")) {
-      responsesAllowedDomains = parseListOption(arg.slice("--responses-allowed-domains=".length));
-      continue;
-    }
-    if (arg === "--responses-excluded-domains") {
-      responsesExcludedDomains = parseListArg("--responses-excluded-domains", args.shift());
-      continue;
-    }
-    if (arg?.startsWith("--responses-excluded-domains=")) {
-      responsesExcludedDomains = parseListOption(arg.slice("--responses-excluded-domains=".length));
-      continue;
-    }
-    if (arg === "--source") {
-      searchSource = args.shift() || "";
-      if (!searchSource) throw new Error("--source 缺少值");
-      continue;
-    }
-    if (arg?.startsWith("--source=")) {
-      searchSource = arg.slice("--source=".length);
-      if (!searchSource) throw new Error("--source 缺少值");
-      continue;
-    }
-    // Aliases kept from before --source existed; both mean the "both" mode.
-    if (arg === "--responses-x-search" || arg === "--responses-include-x-search") {
-      searchSource = "both";
-      continue;
-    }
-    if (arg === "--x-from-date") {
-      xFromDate = parseDateOption("--x-from-date", args.shift());
-      continue;
-    }
-    if (arg?.startsWith("--x-from-date=")) {
-      xFromDate = parseDateOption("--x-from-date", arg.slice("--x-from-date=".length));
-      continue;
-    }
-    if (arg === "--x-to-date") {
-      xToDate = parseDateOption("--x-to-date", args.shift());
-      continue;
-    }
-    if (arg?.startsWith("--x-to-date=")) {
-      xToDate = parseDateOption("--x-to-date", arg.slice("--x-to-date=".length));
-      continue;
-    }
-    if (arg === "--x-images") {
-      xImageUnderstanding = true;
-      continue;
-    }
-    if (arg === "--no-x-images") {
-      xImageUnderstanding = false;
-      continue;
-    }
-    if (arg === "--x-videos") {
-      xVideoUnderstanding = true;
-      continue;
-    }
-    if (arg === "--no-x-videos") {
-      xVideoUnderstanding = false;
-      continue;
-    }
-    if (arg === "--responses-allowed-x-handles") {
-      responsesAllowedXHandles = parseListArg("--responses-allowed-x-handles", args.shift());
-      continue;
-    }
-    if (arg?.startsWith("--responses-allowed-x-handles=")) {
-      responsesAllowedXHandles = parseListOption(arg.slice("--responses-allowed-x-handles=".length));
-      continue;
-    }
-    if (arg === "--responses-excluded-x-handles") {
-      responsesExcludedXHandles = parseListArg("--responses-excluded-x-handles", args.shift());
-      continue;
-    }
-    if (arg?.startsWith("--responses-excluded-x-handles=")) {
-      responsesExcludedXHandles = parseListOption(arg.slice("--responses-excluded-x-handles=".length));
-      continue;
-    }
-    if (arg === "--responses-openrouter-engine") {
-      responsesOpenRouterEngine = args.shift() || "";
-      if (!responsesOpenRouterEngine) throw new Error("--responses-openrouter-engine 缺少值");
-      continue;
-    }
-    if (arg?.startsWith("--responses-openrouter-engine=")) {
-      responsesOpenRouterEngine = arg.slice("--responses-openrouter-engine=".length);
-      continue;
-    }
-    if (arg === "--extra") {
-      if (noExtraSeen) throw new Error("--extra 与 --no-extra 不能同时使用");
-      extraSeen = true;
-      extra = parseIntOption("--extra", args.shift(), { min: 0 });
-      extraMode = extra > 0 ? "explicit" : "off";
-      continue;
-    }
-    if (arg?.startsWith("--extra=")) {
-      if (noExtraSeen) throw new Error("--extra 与 --no-extra 不能同时使用");
-      extraSeen = true;
-      extra = parseIntOption("--extra", arg.slice("--extra=".length), { min: 0 });
-      extraMode = extra > 0 ? "explicit" : "off";
-      continue;
-    }
-    if (arg === "--no-extra") {
-      if (extraSeen) throw new Error("--extra 与 --no-extra 不能同时使用");
-      noExtraSeen = true;
-      extra = 0;
-      extraMode = "off";
-      continue;
-    }
-    if (arg === "--source-chars") {
-      sourceChars = parseIntOption("--source-chars", args.shift(), { min: 0 });
-      continue;
-    }
-    if (arg?.startsWith("--source-chars=")) {
-      sourceChars = parseIntOption("--source-chars", arg.slice("--source-chars=".length), { min: 0 });
-      continue;
-    }
-    if (arg === "--max-sources") {
-      maxSources = parseIntOption("--max-sources", args.shift(), { min: 1 });
-      continue;
-    }
-    if (arg?.startsWith("--max-sources=")) {
-      maxSources = parseIntOption("--max-sources", arg.slice("--max-sources=".length), { min: 1 });
-      continue;
-    }
-    if (arg === "--deadline") {
-      deadline = parseIntOption("--deadline", args.shift(), { min: 0 });
-      continue;
-    }
-    if (arg?.startsWith("--deadline=")) {
-      deadline = parseIntOption("--deadline", arg.slice("--deadline=".length), { min: 0 });
-      continue;
-    }
-    if (arg === "--full-sources") {
-      fullSources = true;
-      continue;
-    }
-    if (arg === "--max-chars") {
-      maxChars = parseIntOption("--max-chars", args.shift(), { min: 0 });
-      continue;
-    }
-    if (arg?.startsWith("--max-chars=")) {
-      maxChars = parseIntOption("--max-chars", arg.slice("--max-chars=".length), { min: 0 });
-      continue;
-    }
-    if (arg?.startsWith("-")) throw new Error(`未知参数: ${arg}`);
-    queryParts.push(arg);
-  }
-
-  const query = queryParts.join(" ").trim();
-  if (!query) throw new Error("缺少 query");
-  if (xFromDate && xToDate && xFromDate > xToDate) throw new Error("--x-from-date 不能晚于 --x-to-date");
-  // Reject an unknown source here so it fails like every other argument error, instead of
-  // after config load and output-dir cleanup.
-  if (searchSource) normalizeSearchSource(searchSource);
-
-  return {
-    query,
-    platform,
-    model,
-    extra,
-    extraMode,
-    sourceChars,
-    maxSources,
-    fullSources,
-    maxChars,
-    deadline,
-    responsesMaxTurns,
-    responsesReasoningEffort,
-    responsesParallelToolCalls,
-    responsesAllowedDomains,
-    responsesExcludedDomains,
-    searchSource,
-    responsesAllowedXHandles,
-    responsesExcludedXHandles,
-    xFromDate,
-    xToDate,
-    xImageUnderstanding,
-    xVideoUnderstanding,
-    responsesOpenRouterEngine,
-    instructions,
-  };
+  return parseArgv(argv, {
+    options: OPTIONS,
+    positional: { name: "query", rest: true, required: "缺少 query" },
+    finish(args) {
+      if (args.extra != null && args.noExtra) throw new Error("--extra 与 --no-extra 不能同时使用");
+      if (args.noExtra) args.extra = 0;
+      args.extraMode = args.extra === 0 ? "off" : args.extra != null ? "explicit" : "auto";
+      delete args.noExtra;
+      if (args.xFromDate && args.xToDate && args.xFromDate > args.xToDate) throw new Error("--x-from-date 不能晚于 --x-to-date");
+    },
+  });
 }
 
 function providerAttempt(result) {
@@ -1099,18 +840,6 @@ async function publicResult(args, config) {
   return output;
 }
 
-function errorOutput(error, code, diagnostics = {}) {
-  return {
-    error: { message: error.message, code },
-    diagnostics: {
-      warnings: [],
-      provider_attempts: [],
-      searched_at: new Date().toISOString(),
-      ...diagnostics,
-    },
-  };
-}
-
 function errorRunRecord(config, args, output) {
   return {
     ...runRecordBase("search", config, output.diagnostics.searched_at),
@@ -1120,43 +849,12 @@ function errorRunRecord(config, args, output) {
   };
 }
 
-let stage = "argument";
-let args = null;
-let config = null;
-try {
-  args = parseArgs(process.argv.slice(2));
-  if (args.help) {
-    console.log(usage());
-    process.exit(0);
-  }
-  stage = "config";
-  config = await loadConfig({ requireGrok: true });
-  assertProxyUsable();
-  await cleanupOutputDir(config);
-  stage = "search";
-  const deadlineSeconds = args.deadline ?? config.deadlineSeconds;
-  const stopDeadline = startDeadline(deadlineSeconds, () => {
-    const error = new Error(`搜索总耗时超过 deadline（>${deadlineSeconds}s），已中止`);
-    const output = errorOutput(error, "DEADLINE_EXCEEDED");
-    const runPath = writeRunRecordSync(config, { kind: "search", label: args.query, record: errorRunRecord(config, args, output) });
-    if (runPath) output.diagnostics.run_path = runPath;
-    printJson(output);
-    console.error(error.message);
-    process.exit(1);
-  });
-  try {
-    printJson(await publicResult(args, config));
-  } finally {
-    stopDeadline();
-  }
-} catch (error) {
-  const code = error.code || (stage === "argument" ? "ARGUMENT_ERROR" : stage === "search" ? "SEARCH_ERROR" : "RUNTIME_ERROR");
-  const output = errorOutput(error, code, error.diagnostics);
-  if (config) {
-    const runPath = await writeRunRecord(config, { kind: "search", label: args?.query || "error", record: errorRunRecord(config, args, output) });
-    if (runPath) output.diagnostics.run_path = runPath;
-  }
-  printJson(output);
-  console.error(error.message);
-  process.exitCode = stage === "argument" ? 2 : 1;
-}
+await runCommand({
+  kind: "search",
+  requireGrok: true,
+  usage,
+  parseArgs,
+  label: (args) => args.query,
+  errorRecord: errorRunRecord,
+  run: publicResult,
+});

@@ -1,9 +1,3 @@
-import { configureProxyFromEnv } from "./proxy.js";
-
-// Every outbound request in this package goes through global fetch, so the proxy must be
-// configured before the first call; importing this module is what guarantees that.
-configureProxyFromEnv();
-
 const RETRYABLE_STATUS = new Set([408, 429, 500, 502, 503, 504]);
 
 export function sleep(ms) {

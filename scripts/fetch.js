@@ -1,22 +1,17 @@
 #!/usr/bin/env node
-import { loadConfig } from "./lib/config.js";
-import { startDeadline } from "./lib/deadline.js";
+import { parseArgv, runCommand } from "./lib/cli.js";
 import { FETCH_CACHE_TTL_MS, readFetchCache, rememberFullPath, writeFetchCache } from "./lib/fetch-cache.js";
 import {
-  cleanupOutputDir,
   fitTextToStdoutBudget,
   previewText,
-  printJson,
   runRecordBase,
   runRecordPath,
   STDOUT_BUDGET_BYTES,
   withNotices,
   writeFullOutput,
   writeRunRecord,
-  writeRunRecordSync,
 } from "./lib/output.js";
 import { fetchUrl } from "./lib/providers.js";
-import { assertProxyUsable } from "./lib/proxy.js";
 
 const DEFAULT_MAX_CHARS = 12000;
 
@@ -43,88 +38,16 @@ Environment:
 `;
 }
 
-function parseIntOption(name, value, { min = 0 } = {}) {
-  if (value == null || value === "") throw new Error(`${name} 缺少数值`);
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isFinite(parsed) || parsed < min) throw new Error(`${name} 必须是 >= ${min} 的整数`);
-  return parsed;
-}
+const OPTIONS = {
+  provider: { flag: "--provider", type: "string", default: "auto", values: ["auto", "tavily", "firecrawl", "direct"] },
+  maxChars: { flag: "--max-chars", type: "int", min: 0, default: DEFAULT_MAX_CHARS },
+  offset: { flag: "--offset", type: "int", min: 0, default: 0 },
+  noCache: { flag: "--no-cache", type: "flag" },
+  deadline: { flag: "--deadline", type: "int", min: 0 },
+};
 
 function parseArgs(argv) {
-  const args = [...argv];
-  let provider = "auto";
-  let maxChars = DEFAULT_MAX_CHARS;
-  let offset = 0;
-  let noCache = false;
-  let deadline = null;
-  let url;
-
-  while (args.length) {
-    const arg = args.shift();
-    if (arg === "--help" || arg === "-h") {
-      return { help: true };
-    }
-    if (arg === "--provider") {
-      provider = args.shift();
-      continue;
-    }
-    if (arg?.startsWith("--provider=")) {
-      provider = arg.slice("--provider=".length);
-      continue;
-    }
-    if (arg === "--max-chars") {
-      maxChars = parseIntOption("--max-chars", args.shift(), { min: 0 });
-      continue;
-    }
-    if (arg?.startsWith("--max-chars=")) {
-      maxChars = parseIntOption("--max-chars", arg.slice("--max-chars=".length), { min: 0 });
-      continue;
-    }
-    if (arg === "--offset") {
-      offset = parseIntOption("--offset", args.shift(), { min: 0 });
-      continue;
-    }
-    if (arg?.startsWith("--offset=")) {
-      offset = parseIntOption("--offset", arg.slice("--offset=".length), { min: 0 });
-      continue;
-    }
-    if (arg === "--no-cache") {
-      noCache = true;
-      continue;
-    }
-    if (arg === "--deadline") {
-      deadline = parseIntOption("--deadline", args.shift(), { min: 0 });
-      continue;
-    }
-    if (arg?.startsWith("--deadline=")) {
-      deadline = parseIntOption("--deadline", arg.slice("--deadline=".length), { min: 0 });
-      continue;
-    }
-    if (arg?.startsWith("-")) {
-      throw new Error(`未知参数: ${arg}`);
-    }
-    if (url) {
-      throw new Error(`只能提供一个 URL，多余参数: ${arg}`);
-    }
-    url = arg;
-  }
-
-  if (!url) throw new Error("缺少 URL");
-  if (!["auto", "tavily", "firecrawl", "direct"].includes(provider)) {
-    throw new Error("--provider 只能是 auto、tavily、firecrawl 或 direct");
-  }
-
-  let parsed;
-  try {
-    parsed = new URL(url);
-  } catch {
-    throw new Error(`URL 无效: ${url}`);
-  }
-  if (!["http:", "https:"].includes(parsed.protocol)) {
-    throw new Error("URL 必须使用 http 或 https 协议");
-  }
-
-  return { url: parsed.toString(), provider, maxChars, offset, noCache, deadline };
+  return parseArgv(argv, { options: OPTIONS, positional: { name: "url", type: "url", required: "缺少 URL" } });
 }
 
 // Firecrawl bills ordinary pages at 1 credit; X posts and other JS-heavy pages cost ~30, and
@@ -283,20 +206,6 @@ async function finishContent(config, output, result, notices, cachedAt) {
   if (kept != null) content.chars = kept.length;
 }
 
-function errorOutput(error, code) {
-  return {
-    error: {
-      message: error.message,
-      code,
-    },
-    diagnostics: {
-      warnings: [],
-      provider_attempts: [],
-      fetched_at: new Date().toISOString(),
-    },
-  };
-}
-
 /** Durable copy of this fetch: full text (not the preview), metadata, every provider tried. */
 function runRecord(config, args, output, result) {
   return {
@@ -324,63 +233,28 @@ function runRecord(config, args, output, result) {
   };
 }
 
-let stage = "argument";
-let args = null;
-let config = null;
-try {
-  args = parseArgs(process.argv.slice(2));
-  if (args.help) {
-    console.log(usage());
-    process.exit(0);
+async function fetchCommand(args, config) {
+  const startedAtMs = Date.now();
+  const cached = args.noCache ? null : await readFetchCache(config, args.url, args.provider);
+  const result = cached ?? (await fetchUrl(args.url, config, { provider: args.provider }));
+  const cachedAt = cached ? cached.cache.fetched_at : await writeFetchCache(config, args.url, args.provider, result);
+  const notices = contentNotices(args, result);
+  const output = await publicResult(args, result, config, Date.now() - startedAtMs, notices);
+  const runPath = runRecordPath(config, { kind: "fetch", label: result.final_url || args.url });
+  if (runPath) output.diagnostics.run_path = runPath;
+  if (output.content) await finishContent(config, output, result, notices, cachedAt);
+  if (output.content?.full_path) await rememberFullPath(config, args.url, cachedAt, output.content.full_path);
+  if (!(await writeRunRecord(config, { at: runPath, record: runRecord(config, args, output, result) }))) {
+    delete output.diagnostics.run_path;
   }
-
-  stage = "config";
-  config = await loadConfig({ requireGrok: false });
-  assertProxyUsable();
-  await cleanupOutputDir(config);
-  stage = "fetch";
-  const deadlineSeconds = args.deadline ?? config.deadlineSeconds;
-  const stopDeadline = startDeadline(deadlineSeconds, () => {
-    const error = new Error(`提取总耗时超过 deadline（>${deadlineSeconds}s），已中止`);
-    const output = errorOutput(error, "DEADLINE_EXCEEDED");
-    const runPath = writeRunRecordSync(config, { kind: "fetch", label: args.url, record: runRecord(config, args, output, null) });
-    if (runPath) output.diagnostics.run_path = runPath;
-    printJson(output);
-    console.error(error.message);
-    process.exit(1);
-  });
-  try {
-    const startedAtMs = Date.now();
-    const cached = args.noCache ? null : await readFetchCache(config, args.url, args.provider);
-    const result = cached ?? (await fetchUrl(args.url, config, { provider: args.provider }));
-    const cachedAt = cached ? cached.cache.fetched_at : await writeFetchCache(config, args.url, args.provider, result);
-    const notices = contentNotices(args, result);
-    const output = await publicResult(args, result, config, Date.now() - startedAtMs, notices);
-    const runPath = runRecordPath(config, { kind: "fetch", label: result.final_url || args.url });
-    if (runPath) output.diagnostics.run_path = runPath;
-    if (output.content) await finishContent(config, output, result, notices, cachedAt);
-    if (output.content?.full_path) await rememberFullPath(config, args.url, cachedAt, output.content.full_path);
-    if (!(await writeRunRecord(config, { at: runPath, record: runRecord(config, args, output, result) }))) {
-      delete output.diagnostics.run_path;
-    }
-
-    printJson(output);
-    if (output.error) {
-      console.error(output.error.message);
-      process.exitCode = 1;
-    }
-  } finally {
-    stopDeadline();
-  }
-} catch (error) {
-  const code = error.code || (stage === "argument" ? "ARGUMENT_ERROR" : stage === "fetch" ? "FETCH_ERROR" : "RUNTIME_ERROR");
-  const output = errorOutput(error, code);
-  if (config) {
-    const runPath = await writeRunRecord(config, { kind: "fetch", label: args?.url || "error", record: runRecord(config, args, output, null) });
-    if (runPath) output.diagnostics.run_path = runPath;
-  }
-  printJson(output);
-  console.error(error.message);
-  if (stage === "argument") console.error(usage());
-  process.exitCode = stage === "argument" ? 2 : 1;
+  return output;
 }
+
+await runCommand({
+  kind: "fetch",
+  usage,
+  parseArgs,
+  label: (args) => args.url,
+  errorRecord: (config, args, output) => runRecord(config, args, output, null),
+  run: fetchCommand,
+});
