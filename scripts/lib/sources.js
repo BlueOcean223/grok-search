@@ -287,7 +287,7 @@ export function hostMatchesDomain(host, domain) {
   return h === d || h.endsWith(`.${d}`);
 }
 
-export function urlInDomains(url, domains) {
+function urlInDomains(url, domains) {
   if (!Array.isArray(domains) || !domains.length) return false;
   let host;
   try {

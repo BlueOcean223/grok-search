@@ -72,7 +72,7 @@ function env(name) {
   return value && value.trim() ? value.trim() : undefined;
 }
 
-export function parseBoolValue(value, fallback = false) {
+function parseBoolValue(value, fallback = false) {
   if (typeof value === "boolean") return value;
   if (typeof value === "number") return value !== 0;
   if (typeof value !== "string") return fallback;

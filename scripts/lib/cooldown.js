@@ -1,5 +1,6 @@
 import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { debugLog } from "./http.js";
 
 /**
  * Cross-command cooldown for Firecrawl quota exhaustion.
@@ -15,14 +16,10 @@ import path from "node:path";
  */
 
 const FILE_NAME = "firecrawl-cooldown.json";
-export const DEFAULT_COOLDOWN_MS = 15 * 60 * 1000;
-export const MAX_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+const DEFAULT_COOLDOWN_MS = 15 * 60 * 1000;
+const MAX_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 
-function debug(config, message) {
-  if (config?.debug) console.error(`[grok-search] ${message}`);
-}
-
-export function cooldownFilePath(config) {
+function cooldownFilePath(config) {
   return path.join(config.stateDir, FILE_NAME);
 }
 
@@ -33,7 +30,7 @@ export async function readFirecrawlCooldown(config) {
   try {
     record = JSON.parse(await readFile(filePath, "utf8"));
   } catch (error) {
-    if (error.code !== "ENOENT") debug(config, `cooldown read skipped: ${error.message}`);
+    if (error.code !== "ENOENT") debugLog(config, `cooldown read skipped: ${error.message}`);
     return null;
   }
 
@@ -68,7 +65,7 @@ export async function recordFirecrawlCooldown(config, { authMode, retryAfterMs, 
     await mkdir(config.stateDir, { recursive: true, mode: 0o700 });
     await writeFile(cooldownFilePath(config), JSON.stringify(record, null, 2), { encoding: "utf8", mode: 0o600 });
   } catch (error) {
-    debug(config, `cooldown write skipped: ${error.message}`);
+    debugLog(config, `cooldown write skipped: ${error.message}`);
   }
   return record;
 }
@@ -78,7 +75,7 @@ export async function clearFirecrawlCooldown(config) {
   try {
     await unlink(cooldownFilePath(config));
   } catch (error) {
-    if (error.code !== "ENOENT") debug(config, `cooldown clear skipped: ${error.message}`);
+    if (error.code !== "ENOENT") debugLog(config, `cooldown clear skipped: ${error.message}`);
   }
 }
 

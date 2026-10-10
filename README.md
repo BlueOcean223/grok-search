@@ -377,12 +377,7 @@ map 成功输出使用 `urls` 表示发现的 URL。provider、response time、i
 ```bash
 ./scripts/fetch.js --provider direct https://example.com
 ./scripts/map.js --provider direct https://example.com --limit 5
-node tests/sources.test.js
-node tests/proxy.test.js
-node tests/responses.test.js
-node tests/output.test.js
-node tests/retry.test.js
-node tests/firecrawl.test.js
+npm test
 node tests/argv.test.js
 ```
 

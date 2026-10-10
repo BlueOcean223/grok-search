@@ -14,7 +14,7 @@
     "search": "node scripts/search.js",
     "benchmark": "node benchmarks/run-responses-15q.mjs",
     "benchmark:score": "node benchmarks/score-responses-15q.mjs",
-    "test": "node tests/cli.test.js && node tests/sources.test.js && node tests/proxy.test.js && node tests/responses.test.js && node tests/search.test.js && node tests/output.test.js && node tests/provider-result.test.js && node tests/fetch-cache.test.js && node tests/retry.test.js && node tests/http.test.js && node tests/firecrawl.test.js && node tests/argv.test.js",
+    "test": "node tests/cli.test.js && node tests/sources.test.js && node tests/proxy.test.js && node tests/responses.test.js && node tests/search.test.js && node tests/output.test.js && node tests/provider-result.test.js && node tests/fetch-cache.test.js && node tests/retry.test.js && node tests/http.test.js && node tests/providers.test.js && node tests/argv.test.js",
     "test:argv": "node tests/argv.test.js",
     "test:sources": "node tests/sources.test.js"
   },

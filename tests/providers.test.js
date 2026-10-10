@@ -755,4 +755,4 @@ await withServer(
   }
 );
 
-console.log("firecrawl fixtures ok");
+console.log("providers fixtures ok");

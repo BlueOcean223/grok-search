@@ -1,12 +1,10 @@
+import { isPlainObject } from "./http.js";
+
 const COST_TICK_DIVISOR = 10_000_000_000;
 
 export function numericField(value) {
   const parsed = typeof value === "number" ? value : Number.parseFloat(value);
   return Number.isFinite(parsed) ? parsed : null;
-}
-
-function isPlainObject(value) {
-  return value != null && typeof value === "object" && !Array.isArray(value);
 }
 
 export function usageDiagnostics(data) {

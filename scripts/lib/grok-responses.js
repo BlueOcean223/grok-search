@@ -1,4 +1,4 @@
-import { authHeaders, requestJson } from "./http.js";
+import { authHeaders, isPlainObject, requestJson } from "./http.js";
 import { usesWebSearch, usesXSearch } from "./config.js";
 import { getLocalTimeContext, platformPrompt } from "./context.js";
 import { ANSWER_MARKER_PATTERN, SEARCH_BUDGET_TOTAL, SEARCH_BUDGET_X, searchPrompt, xSearchPrompt } from "./prompts.js";
@@ -8,10 +8,6 @@ import { numericField, usageDiagnostics } from "./usage.js";
 function asArray(value) {
   if (Array.isArray(value)) return value;
   return value == null ? [] : [value];
-}
-
-function isPlainObject(value) {
-  return value != null && typeof value === "object" && !Array.isArray(value);
 }
 
 function responsesEndpoint(config) {

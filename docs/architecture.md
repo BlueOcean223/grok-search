@@ -9,27 +9,36 @@
 ## 组件
 
 ```text
-scripts/search.js
-  ├─ lib/grok-responses.js  Responses 请求、tool trace 与 citation 解析
-  ├─ lib/context.js         本地时间和 platform 上下文
-  ├─ lib/providers.js       fetch / map 编排：provider 顺序、X 原帖 Direct 优先、失败接力；re-export 下面四个适配器
-  ├─ lib/http.js            requestJson：重试与退避、Retry-After、脱敏、代理初始化
-  ├─ lib/tavily.js          Tavily Extract / Search / Map
-  ├─ lib/firecrawl.js       Firecrawl Scrape / Search、metadata、额度判断与冷却记录
-  ├─ lib/direct.js          Direct fetch / map：HTML 转文本、X 原帖校验、sitemap 与链接解析
-  ├─ lib/cooldown.js        Firecrawl 额度耗尽后的跨命令冷却状态
-  ├─ lib/fetch-cache.js     fetch 结果的 15 分钟跨命令缓存
-  ├─ lib/sources.js         信源压缩、规范化、字段合并去重、域名过滤降级
-  ├─ lib/output.js          JSON、preview、完整输出与运行记录落盘
-  ├─ lib/prompts.js         system prompt 与软预算常量
-  └─ lib/config.js          环境变量和配置文件
+scripts/search.js           一张选项表 + runCommand（选项表与 runSearch 在 lib/search.js）
+scripts/fetch.js            一张选项表 + runCommand；Direct（请求 Markdown，非 HTML 直接返回）→ Firecrawl Scrape → Tavily Extract → Direct 文本
+scripts/map.js              一张选项表 + runCommand；Tavily Map → Direct Map
 
-scripts/fetch.js
-  └─ Direct（请求 Markdown，非 HTML 直接返回）→ Firecrawl Scrape → Tavily Extract → Direct 文本
-
-scripts/map.js
-  └─ Tavily Map → Direct Map
+lib/cli.js                  三条命令共用的运行器：按选项表解析 argv、生成 usage、套用配置默认值、代理、deadline、错误封装与退出码
+lib/config.js               配置表（CONFIG_OPTIONS）：环境变量 > 配置文件 > 默认值
+lib/proxy.js                代理 URL 解析与 undici dispatcher 设置
+lib/search.js               Search 命令：选项表、runSearch（Grok 通道、extra 通道、合并、输出、运行记录）；三个搜索通道可注入
+lib/grok-responses.js       Responses 请求、tool trace 与 citation 解析、最终诊断（grokSearchResult）
+lib/context.js              本地时间和 platform 上下文
+lib/prompts.js              system prompt 与软预算常量
+lib/usage.js                usage 与费用字段
+lib/providers.js            fetch / map 编排：provider 顺序、X 原帖 Direct 优先、失败接力、fallback 判定
+lib/provider-result.js      每次 provider 调用的计时与 attempt 记录（timed / attemptFrom / skippedResult）
+lib/http.js                 requestJson（POST JSON：重试与退避、Retry-After、脱敏）与 getText（GET 文本：超时、字节上限、charset 解码、附件判断）
+lib/tavily.js               Tavily Extract / Search / Map
+lib/firecrawl.js            Firecrawl Scrape / Search、metadata、额度判断与冷却记录
+lib/direct-fetch.js         Direct Fetch：按 content-type 原样返回或 HTML 转文本、X 原帖校验与 Direct 优先判定
+lib/direct-map.js           Direct Map：页面链接与 sitemap（robots.txt、常规位置、索引展开）
+lib/html.js                 无解析器的 HTML 读取：实体、链接、可读文本
+lib/map-scope.js            map 的范围：URL 的目录路径、范围判断、Tavily select_paths
+lib/cooldown.js             Firecrawl 额度耗尽后的跨命令冷却状态
+lib/fetch-cache.js          fetch 结果的 15 分钟跨命令缓存
+lib/sources.js              来源卡片：统一构造器 sourceCard、去重键 sourceKey、跨通道合并、压缩、RRF 选取、域名过滤降级
+lib/output.js               emitText（preview、[grok-search] 提示行、stdout 预算、全文落盘）、JSON 输出与运行记录
 ```
+
+三条命令的结构相同：一张选项表（每个 flag 的类型、默认值、帮助文本、分组，以及它对应的配置键）加一个 `run(args, config)`。`lib/cli.js` 的 `runCommand` 负责其余所有事：解析、`--help`、加载配置、代理、把带 `config` 键的 flag 补上配置值、清理输出目录、deadline、把异常变成 `{ error: { code, message } }` 和退出码（参数错误 2，其余 1）、失败时也写运行记录。例外是 Search 的 X 媒体开关和 handle 列表：命令行给出时隐含开启 X 搜索，配置里的只是偏好，所以它们不走表默认值，在 `resolveSearchOptions` 里显式合并。
+
+Search 的逻辑都在 `lib/search.js` 的 `runSearch(args, config, adapters)`：三个搜索通道（Grok、Tavily、Firecrawl）是参数，测试传假的，CLI 不传。
 
 生产代码与公开 benchmark 均不包含 Chat Completions；历史 Chat 对照实验仅保存在本地私有档案中。
 
@@ -109,7 +118,7 @@ Direct Map 刻意保持浅层，不执行 JavaScript，并忽略自然语言过�
 - `firecrawl_auth_mode: keyless | api_key`
 - `cache`（仅 fetch 命中缓存时）：`{ hit, fetched_at, age_seconds }`
 
-长文本在 stdout 中返回 preview，完整内容按需写入输出目录。preview 先按 `--max-chars`（字符，fetch 从 `--offset` 起算）截，再按 `STDOUT_BUDGET_BYTES`（45KB，整个 JSON 的 UTF-8 字节）截：pi 的 bash 工具只保留最后 50KB 的整行，单行的长正文超限会连同它上面的行一起丢掉；`--full-sources` 时其余字段已超预算，不截。会改变正文读法的 warning 同时以 `[grok-search]` 开头的行写进正文（`lib/output.js` 的 `withNotices`）：截断写在末尾，fetch 给出下一段的 `--offset` 和全文路径；跳到首页、Direct 只拿到标题、X 页面未通过校验写在开头。`fitTextToStdoutBudget` 截短时只截正文、保留这些行，`chars` 只算正文。原因是 agent 常常只打印 `content.text` / `answer.text`（截至 2026-10-09，Claude Code 约 105 次调用只打印过 1 次 warnings）。每次调用另写一份运行记录（`schema_version: 2`，成功 / 失败 / deadline 都写；成功时在 stdout 截断之后写，带 `printed_answer` / `printed_content`），search 通过 `sources.raw_path`、fetch / map 通过 `diagnostics.run_path` 引用；`GROK_RUN_LOG=off` 关闭。`grok_tool_calls[].source_count` 是中转挂在每个 call 上的累积值，不能做逐次归因。
+长文本在 stdout 中返回 preview，完整内容按需写入输出目录。preview 先按 `--max-chars`（字符，fetch 从 `--offset` 起算）截，再按 `STDOUT_BUDGET_BYTES`（45KB，整个 JSON 的 UTF-8 字节）截：pi 的 bash 工具只保留最后 50KB 的整行，单行的长正文超限会连同它上面的行一起丢掉；`--full-sources` 时其余字段已超预算，不截。会改变正文读法的 warning 同时以 `[grok-search]` 开头的行写进正文（`lib/output.js` 的 `emitText`，search 的 answer 和 fetch 的 content 都经它输出）：截断写在末尾，fetch 给出下一段的 `--offset` 和全文路径；跳到首页、Direct 只拿到标题、X 页面未通过校验写在开头。`fitTextToStdoutBudget` 截短时只截正文、保留这些行，`chars` 只算正文。原因是 agent 常常只打印 `content.text` / `answer.text`（截至 2026-10-09，Claude Code 约 105 次调用只打印过 1 次 warnings）。每次调用另写一份运行记录（`schema_version: 2`，成功 / 失败 / deadline 都写；成功时在 stdout 截断之后写，带 `printed_answer` / `printed_content`），search 通过 `sources.raw_path`、fetch / map 通过 `diagnostics.run_path` 引用；`GROK_RUN_LOG=off` 关闭。`grok_tool_calls[].source_count` 是中转挂在每个 call 上的累积值，不能做逐次归因。
 
 fetch 成功结果在 `<stateDir>/fetch-cache/` 保留 15 分钟（`lib/fetch-cache.js`，与 Claude Code WebFetch 的缓存时长相同）：每个 URL 一个文件，按 sha256 命名，写临时文件再 rename；`auto` 只复用 `auto` 的结果，显式 provider 复用该 provider 产出的结果；只存正文、元数据、warnings 和 notices，不存 `credits_used` 等成本字段，命中时 `provider_attempts` 为空；失败和回退结果都不缓存（`fellBack`：提取器失败之后才拿到的结果、复用的 Direct 文本），条目记下截断页面的 `full_path` 供续读复用，过期文件在下次写入时清理；`--no-cache` 跳过读取。
 

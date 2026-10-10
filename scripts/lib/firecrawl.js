@@ -13,7 +13,7 @@ function firecrawlHeaders(config) {
 }
 
 /** Firecrawl signals an exhausted allowance with 402, or 429 plus `reason: "credits"`. */
-export function isFirecrawlQuotaError(error) {
+function isFirecrawlQuotaError(error) {
   return error?.status === 402 || error?.upstreamCode === "credits";
 }
 

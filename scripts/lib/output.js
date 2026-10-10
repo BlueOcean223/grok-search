@@ -2,14 +2,10 @@ import { randomBytes } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { mkdir, readdir, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { redactSecrets } from "./http.js";
+import { debugLog, redactSecrets } from "./http.js";
 
 const OUTPUT_PREFIX = "grok-search-";
-export const RUN_RECORD_SCHEMA_VERSION = 2;
-
-function debug(config, message) {
-  if (config?.debug) console.error(`[grok-search] ${message}`);
-}
+const RUN_RECORD_SCHEMA_VERSION = 2;
 
 function timestamp() {
   const date = new Date();
@@ -58,7 +54,7 @@ export async function cleanupOutputDir(config) {
       })
     );
   } catch (error) {
-    debug(config, `output cleanup skipped: ${error.message}`);
+    debugLog(config, `output cleanup skipped: ${error.message}`);
   }
 }
 
@@ -89,12 +85,12 @@ export async function writeFullOutput(config, { kind, provider, label, content, 
   return fullPath;
 }
 
-export async function writeJsonOutput(config, { kind, provider, label, value }) {
+async function writeJsonOutput(config, { kind, provider, label, value }) {
   return writeFullOutput(config, {
     kind,
     provider,
     label,
-    content: JSON.stringify(value, jsonReplacer, 2),
+    content: JSON.stringify(value, null, 2),
     extension: "json",
   });
 }
@@ -136,10 +132,10 @@ export async function writeRunRecord(config, { kind, label, record, at = null })
   try {
     if (!at) return await writeJsonOutput(config, { kind: "run", provider: kind, label, value: record });
     await mkdir(path.dirname(at), { recursive: true, mode: 0o700 });
-    await writeFile(at, JSON.stringify(record, jsonReplacer, 2), { encoding: "utf8", mode: 0o600 });
+    await writeFile(at, JSON.stringify(record, null, 2), { encoding: "utf8", mode: 0o600 });
     return at;
   } catch (error) {
-    debug(config, `run record skipped: ${error.message}`);
+    debugLog(config, `run record skipped: ${error.message}`);
     return null;
   }
 }
@@ -150,10 +146,10 @@ export function writeRunRecordSync(config, { kind, label, record }) {
   try {
     mkdirSync(config.outputDir, { recursive: true, mode: 0o700 });
     const fullPath = outputPath(config, { kind: "run", provider: kind, label, extension: "json" });
-    writeFileSync(fullPath, JSON.stringify(record, jsonReplacer, 2), { encoding: "utf8", mode: 0o600 });
+    writeFileSync(fullPath, JSON.stringify(record, null, 2), { encoding: "utf8", mode: 0o600 });
     return fullPath;
   } catch (error) {
-    debug(config, `run record skipped: ${error.message}`);
+    debugLog(config, `run record skipped: ${error.message}`);
     return null;
   }
 }
@@ -203,7 +199,7 @@ const CUT_RESERVE_BYTES = 1024;
 
 /** Bytes `printJson(value)` writes, including the trailing newline. */
 export function stdoutBytes(value) {
-  return Buffer.byteLength(JSON.stringify(value, jsonReplacer, 2), "utf8") + 1;
+  return Buffer.byteLength(JSON.stringify(value, null, 2), "utf8") + 1;
 }
 
 /**
@@ -276,10 +272,6 @@ export async function emitText(config, output, key, { text, maxChars, offset = n
   return holder;
 }
 
-export function jsonReplacer(_key, value) {
-  return value === undefined ? undefined : value;
-}
-
 export function printJson(value) {
-  console.log(JSON.stringify(value, jsonReplacer, 2));
+  console.log(JSON.stringify(value, null, 2));
 }

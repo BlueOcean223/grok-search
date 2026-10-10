@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { mkdir, readdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { debugLog } from "./http.js";
 
 /**
  * Short per-URL cache of fetch results, the same 15 minutes Claude Code's WebFetch keeps.
@@ -21,10 +22,6 @@ export const FETCH_CACHE_TTL_MS = 15 * 60 * 1000;
 const DIR_NAME = "fetch-cache";
 // What a cached result carries: the text and how it was obtained, not what it cost.
 const CACHED_FIELDS = ["ok", "provider", "content", "final_url", "redirected", "metadata", "warnings", "notices"];
-
-function debug(config, message) {
-  if (config?.debug) console.error(`[grok-search] ${message}`);
-}
 
 function cacheDir(config) {
   return config?.stateDir ? path.join(config.stateDir, DIR_NAME) : null;
@@ -99,7 +96,7 @@ export async function writeFetchCache(config, url, provider, result) {
     await writeEntries(file, url, entries);
     return cachedAt;
   } catch (error) {
-    debug(config, `fetch cache write skipped: ${error.message}`);
+    debugLog(config, `fetch cache write skipped: ${error.message}`);
     return null;
   }
 }
@@ -119,7 +116,7 @@ export async function rememberFullPath(config, url, cachedAt, fullPath) {
     entry.full_path = fullPath;
     await writeEntries(file, url, entries);
   } catch (error) {
-    debug(config, `fetch cache update skipped: ${error.message}`);
+    debugLog(config, `fetch cache update skipped: ${error.message}`);
   }
 }
 
