@@ -1,5 +1,5 @@
 import { trimBody } from "./http.js";
-import { isXUrl, parseXPostUrl } from "./sources.js";
+import { inMapScope, isXUrl, mapScope, parseXPostUrl } from "./sources.js";
 
 const DIRECT_FETCH_MAX_BYTES = 2 * 1024 * 1024;
 const DIRECT_ERROR_PREVIEW_BYTES = 1000;
@@ -66,18 +66,6 @@ function uniqueLimited(urls, limit) {
 // Sitemap documents read per map, index files included. A large store's index can list hundreds
 // of child sitemaps, and reading them all would outlast the command deadline.
 const MAX_SITEMAP_DOCUMENTS = 10;
-
-/** The path a map stays under: "/docs" for ".../docs" and ".../docs/", "" for the site root. */
-function mapScope(url) {
-  return new URL(url).pathname.replace(/\/+$/, "");
-}
-
-function inMapScope(candidate, host, scope) {
-  const parsed = new URL(candidate);
-  if (parsed.hostname !== host) return false;
-  const path = parsed.pathname.replace(/\/+$/, "");
-  return !scope || path === scope || path.startsWith(`${scope}/`);
-}
 
 /** Absolute http(s) URLs without fragments; malformed values are dropped. */
 function absoluteUrls(values, base) {
@@ -157,10 +145,9 @@ function hrefValues(html) {
 /**
  * Candidate URLs for a site, or for the section a URL with a path names. Like a crawler, it
  * starts from the URL it was given: the links on that page come first, then the site's sitemaps.
- * A URL with a path keeps to that path and below, as Firecrawl's crawl does by default
- * ("crawl ignores sublinks that are not children of the URL you provide"). Mapping
- * www.compshare.cn/docs on 2026-10-10 returned 200 of the site's 891 sitemap URLs: 4 under
- * /docs, 179 under /images.
+ * Results keep to mapScope, filtered before the limit: mapping www.compshare.cn/docs with the
+ * whole sitemap on 2026-10-10 returned 200 of the site's 891 URLs, 4 under /docs and 179 under
+ * /images.
  */
 export async function directMap(url, options = {}) {
   const warnings = [];

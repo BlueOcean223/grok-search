@@ -346,7 +346,9 @@ Provider order for `--provider auto`:
 Tavily Map -> Direct Map
 ```
 
-Without `TAVILY_API_KEY`, Tavily Map is unavailable and `map.js` falls back to Direct Map; it also falls back when Tavily Map returns an empty list (with an explicit `--provider tavily` the empty list is returned with a warning). Direct Map takes the links on the requested page, then the site's sitemaps (those robots.txt declares, `/sitemap.xml`, and `<path>/sitemap.xml` for a URL with a path; sitemap indexes are expanded, up to 10 files). A URL with a path keeps to that path and below, the scope Firecrawl's crawl uses by default, and a warning counts what was left out; map the site root for the whole site. It ignores `--instructions` and supports only `--max-depth 1`.
+Both providers return only this site's pages at or under the URL's path, the scope Firecrawl's crawl uses by default; map the site root for the whole site. Tavily gets `select_paths` (such as `^/docs(/.*)?$`) and `allow_external: false` for this: on 2026-09-28, docs.fiat24.com/user mapped to 20 URLs, 4 under /products and /legal and 2 on gitbook.com; with the two parameters on 10-10 it gave the 14 under /user.
+
+Without `TAVILY_API_KEY`, Tavily Map is unavailable and `map.js` falls back to Direct Map; it also falls back when Tavily Map returns an empty list (with an explicit `--provider tavily` the empty list is returned with a warning). Direct Map takes the links on the requested page, then the site's sitemaps (those robots.txt declares, `/sitemap.xml`, and `<path>/sitemap.xml` for a URL with a path; sitemap indexes are expanded, up to 10 files). It filters to the scope above and a warning counts what was left out. It ignores `--instructions` and supports only `--max-depth 1`.
 
 `--timeout` (default 150s) is the crawl budget handed to Tavily Map; Direct Map's own requests for robots.txt, the sitemaps and the page use a separate `--direct-timeout` (default 30s), so one stalled request cannot consume most of the command deadline. Both values are recorded in `diagnostics.options`.
 

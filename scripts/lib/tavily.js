@@ -1,5 +1,5 @@
 import { authHeaders, requestJson } from "./http.js";
-import { domainFilters } from "./sources.js";
+import { domainFilters, mapScope } from "./sources.js";
 
 export async function tavilyExtract(url, config) {
   if (!config.tavilyApiKey) {
@@ -85,12 +85,18 @@ export async function tavilyMap(url, options, config) {
   }
 
   const endpoint = `${config.tavilyApiUrl.replace(/\/+$/, "")}/map`;
+  // The scope Direct Map keeps to: this site's pages, at or under the URL's path. By default
+  // Tavily returns other paths and other sites too; docs.fiat24.com/user gave 20 URLs on
+  // 2026-09-28, 4 under /products and /legal and 2 on gitbook.com.
+  const scope = mapScope(url);
   const body = {
     url,
     max_depth: options.maxDepth,
     max_breadth: options.maxBreadth,
     limit: options.limit,
     timeout: options.timeout,
+    allow_external: false,
+    ...(scope ? { select_paths: [`^${scope.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(/.*)?$`] } : {}),
   };
   if (options.instructions) body.instructions = options.instructions;
 

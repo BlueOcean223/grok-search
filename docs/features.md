@@ -107,7 +107,9 @@ X 原帖在 `auto` 下不论 key 都先走 Direct（校验 handle、日期、正
 Tavily Map → Direct Map
 ```
 
-Tavily Map 返回空列表时 `auto` 也交给 Direct Map；显式 `--provider tavily` 原样返回并写 warning。Direct Map 取请求页面的链接和站点 sitemap（robots.txt 声明的、`/sitemap.xml`、`<路径>/sitemap.xml`，索引展开）。URL 带路径时只保留该路径及其下的 URL：2026-10-10 map www.compshare.cn/docs 时，旧做法返回整站 sitemap 的前 200 个，179 个在 /images、4 个在 /docs；现在返回 /docs 下的 5 个，并提示另有 888 个站内 URL 被排除。
+两个 provider 都只返回本站、URL 路径及其下的页面（Firecrawl crawl 的默认范围）：Tavily 传 `select_paths` 和 `allow_external: false`，Direct 自己过滤。要整站就 map 站点根。
+
+Tavily Map 返回空列表时 `auto` 也交给 Direct Map；显式 `--provider tavily` 原样返回并写 warning。Direct Map 取请求页面的链接和站点 sitemap（robots.txt 声明的、`/sitemap.xml`、`<路径>/sitemap.xml`，索引展开）。2026-10-10 map www.compshare.cn/docs 时，旧做法返回整站 sitemap 的前 200 个，179 个在 /images、4 个在 /docs；现在返回 /docs 下的 5 个，并提示另有 888 个站内 URL 被排除。
 
 ## 核心配置
 

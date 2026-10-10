@@ -243,6 +243,23 @@ export function urlInDomains(url, domains) {
   return domains.some((domain) => hostMatchesDomain(host, domain));
 }
 
+/**
+ * The path a map stays under: "/docs" for ".../docs" and ".../docs/", "" for the site root. Both
+ * map providers keep to it, the scope Firecrawl's crawl uses by default ("crawl ignores sublinks
+ * that are not children of the URL you provide").
+ */
+export function mapScope(url) {
+  return new URL(url).pathname.replace(/\/+$/, "");
+}
+
+/** On `host`, at or under the `scope` path. */
+export function inMapScope(candidate, host, scope) {
+  const parsed = new URL(candidate);
+  if (parsed.hostname !== host) return false;
+  const path = parsed.pathname.replace(/\/+$/, "");
+  return !scope || path === scope || path.startsWith(`${scope}/`);
+}
+
 function isExtraSource(source) {
   return !textField(source?.source_type);
 }

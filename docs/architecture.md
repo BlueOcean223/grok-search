@@ -81,9 +81,9 @@ URL
 ## Map 数据流
 
 ```text
-site URL
-  ├─ Tavily Map（配置 key 时）
-  └─ Direct Map（URL 带路径时只保留该路径及其下的 URL）
+site URL（两个 provider 都只返回本站、该路径及其下的 URL）
+  ├─ Tavily Map（配置 key 时；select_paths + allow_external: false）
+  └─ Direct Map
        ├─ 请求页面上的同域链接
        └─ sitemap：robots.txt 声明的、/sitemap.xml、<路径>/sitemap.xml，索引展开（最多 10 个文件）
 ```

@@ -54,7 +54,7 @@ export async function mapUrl(url, config, { provider = "auto", ...options } = {}
       error: handOver ? "returned no URLs" : result.error,
     });
     if (result.ok && !handOver) {
-      const warnings = empty ? ["Tavily Map returned no URLs; --provider direct reads the site's sitemap.xml and home page instead."] : [];
+      const warnings = empty ? ["Tavily Map returned no URLs; --provider direct reads the page's links and the site's sitemaps instead."] : [];
       return { ...result, warnings: [...(result.warnings || []), ...warnings], tried };
     }
     if (provider === "tavily") return { ...result, tried };

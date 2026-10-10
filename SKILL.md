@@ -56,6 +56,6 @@ Every script prints one JSON object, also on failure (non-zero exit, stderr line
 - `diagnostics.warnings` and `diagnostics.provider_attempts` say which providers were skipped (e.g. Firecrawl in cooldown), failed, or produced content, and whether the relay served another model than requested.
 - Search: `answer.text`, then `sources.items` (max 12; Grok's sources and Tavily/Firecrawl results share them, so a cited link may appear only in `answer.text`). `source_type` `citation` = used in the answer, `searched` = only listed; `opened: true` = Grok read the page. `sources.raw_path` always points to the run record (full list, answer, tool calls); read it in chunks only when the cards are not enough. Check `diagnostics.degraded`, `diagnostics.cost_usd`, and `diagnostics.search_budget` (advisory budget vs. calls made).
 - Fetch: `content.text`; if `content.truncated`, read `content.full_path` in chunks. stdout stays under 45KB whatever `--max-chars` says; a warning says when that cut the text. `metadata` has title/author/published_at when the provider had them. `diagnostics.run_path` is the run record.
-- Map: `urls`; fetch the few you need.
+- Map: `urls`; fetch the few you need. A URL with a path maps that path and below, on that site only; map the site root for the whole site.
 
 Provider order, proxy, cooldown, config errors: `references/providers.md`. Multi-part or conflicting research: `references/planning.md` first.

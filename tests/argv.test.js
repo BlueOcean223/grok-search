@@ -1315,14 +1315,18 @@ await withServer(
 // Tavily mapped www.compshare.cn/docs to an empty list (2026-10-07) while Direct read 200 URLs
 // from the sitemap. Under auto an empty list falls through to Direct; asked for by name, Tavily's
 // empty answer stands, with a warning.
+const tavilyMapBodies = [];
 await withServer(
   (req, res) => {
-    req.resume();
     if (req.url === "/tavily/map") {
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ base_url: `http://${req.headers.host}`, results: [] }));
+      readJson(req, (body) => {
+        tavilyMapBodies.push(body);
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ base_url: `http://${req.headers.host}`, results: [] }));
+      });
       return;
     }
+    req.resume();
     if (req.url === "/sitemap.xml") {
       res.writeHead(200, { "content-type": "application/xml" });
       res.end(`<urlset><url><loc>http://${req.headers.host}/docs/a</loc></url></urlset>`);
@@ -1347,6 +1351,17 @@ await withServer(
     const named = parseJson((await runNode(["scripts/map.js", "--provider", "tavily", `http://127.0.0.1:${port}/docs`], env)).stdout);
     assert.deepEqual(named.urls, []);
     assert.match(named.diagnostics.warnings.join("\n"), /Tavily Map returned no URLs/);
+
+    // Tavily keeps to the same scope as Direct Map: this site, at or under the URL's path.
+    await runNode(["scripts/map.js", "--provider", "tavily", `http://127.0.0.1:${port}/`], env);
+    assert.deepEqual(
+      tavilyMapBodies.map((body) => [body.allow_external, body.select_paths ?? null]),
+      [
+        [false, ["^/docs(/.*)?$"]],
+        [false, ["^/docs(/.*)?$"]],
+        [false, null],
+      ]
+    );
   }
 );
 
