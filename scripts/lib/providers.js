@@ -5,7 +5,7 @@
  * here so callers keep a single import path.
  */
 import { activeFirecrawlCooldown, clearFirecrawlCooldown, cooldownSkipMessage } from "./cooldown.js";
-import { directFetch, directFirstForX, directMap, validateXPostContent } from "./direct.js";
+import { directFetch, directFirstForX, directMap, plainTextFileUrl, validateXPostContent } from "./direct.js";
 import { firecrawlAuthMode, firecrawlScrape } from "./firecrawl.js";
 import { parseXPostUrl } from "./sources.js";
 import { tavilyExtract, tavilyMap } from "./tavily.js";
@@ -19,6 +19,7 @@ export {
   directFetch,
   directFirstForX,
   directMap,
+  plainTextFileUrl,
   validateXPostContent,
   xDirectFirstEligible,
 } from "./direct.js";
@@ -113,6 +114,17 @@ export async function fetchUrl(url, config, { provider = "auto" } = {}) {
       skipped: false,
       error: result.ok ? `x_validation_failed: ${validation.missing.join(",")}` : result.error,
     });
+  } else if (provider === "auto" && plainTextFileUrl(url)) {
+    const result = await directFetch(url);
+    const type = result.metadata?.content_type || "";
+    if (result.ok && !/html/i.test(type)) {
+      tried.push({ provider: "direct", ok: true, skipped: false, plain_text: true });
+      return { ...result, tried };
+    }
+    // A file-like URL that serves an HTML page (github.com/.../blob/x.md, docs.rs source
+    // views) goes on to the usual order; Direct's copy stays as the last resort.
+    directFirst = result;
+    tried.push({ provider: "direct", ok: false, skipped: false, error: result.ok ? `served ${type}, not plain text` : result.error });
   }
 
   if (provider === "auto" || provider === "tavily") {
@@ -147,13 +159,19 @@ export async function fetchUrl(url, config, { provider = "auto" } = {}) {
 
   if (provider === "auto") {
     if (directFirst) {
-      // Direct already ran for this X post. Its page did not validate, but with nothing else
-      // available it is still better than an error; say so instead of fetching it again.
+      // Direct already ran for this URL. Its page did not qualify (an X post that did not
+      // validate, a file-like URL that served HTML), but with nothing else available it is
+      // still better than an error; reuse it instead of fetching again.
       if (directFirst.ok) {
-        const failed = tried.find((attempt) => attempt.provider === "direct" && !attempt.ok);
-        const warning = `The X page Direct fetched failed post validation (${failed?.error || "x_validation_failed"}) and no other provider was available, so it is returned as is; use --provider firecrawl for the full post or the thread.`;
+        const warnings = [...(directFirst.warnings || [])];
+        if (xPost) {
+          const failed = tried.find((attempt) => attempt.provider === "direct" && !attempt.ok);
+          warnings.push(
+            `The X page Direct fetched failed post validation (${failed?.error || "x_validation_failed"}) and no other provider was available, so it is returned as is; use --provider firecrawl for the full post or the thread.`
+          );
+        }
         tried.push({ provider: "direct", ok: true, skipped: false, reused: true });
-        return { ...directFirst, warnings: [...(directFirst.warnings || []), warning], tried };
+        return { ...directFirst, warnings, tried };
       }
       return { ...directFirst, tried, error: summarizeFetchFailure(tried, directFirst.error) };
     }

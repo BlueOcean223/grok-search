@@ -305,6 +305,8 @@ Tavily Extract -> Firecrawl Scrape -> Direct Fetch
 
 Direct Fetch 是普通 HTTP(S) 文本页面的 best-effort fallback。它会做简单 HTML 清理、尽量格式化 JSON、记录重定向，并拒绝二进制 / 附件 / 超大响应。
 
+指向纯文本文件的 URL（`raw.githubusercontent.com`、`gist.githubusercontent.com`，或路径以 `.md` / `.markdown` / `.txt` / `.rst` 结尾）在 `--provider auto` 下先走 Direct：服务器返回的是纯文本就原样采用，返回 HTML（如 `github.com/.../blob/x.md`）再走上面的顺序。2026-10-10 拿 41 个这类 URL 对照，Tavily 有 9 个拿到的文本不到 Direct 的七成，最少只有 3%（code.claude.com 的 statusline.md：1,870 / 67,266 字符）。
+
 Firecrawl 会把目标页的状态码一并返回：状态码 ≥ 400 的页面按失败处理，交给下一个 provider（2026-09-15 至 10-06 记录在案的 7 次全是 404 / 503 错误页）。Firecrawl 和 Direct 都会把最终 URL 写进 `final_url` / `redirected`；带路径的 URL 最终落在站点首页时写一条 warning，这种情况多半是页面已删除（例如 gov.cn 用脚本把已删除的页面跳回首页）。
 
 Firecrawl Scrape 无 key 时会使用 Keyless；配置 `FIRECRAWL_API_KEY` 后会自动发送 Bearer token。当前认证模式写入 `diagnostics.firecrawl_auth_mode`。

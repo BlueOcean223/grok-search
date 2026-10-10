@@ -85,6 +85,8 @@ Tavily Extract → Firecrawl Scrape → Direct Fetch
 
 Firecrawl 无 key 时走 Keyless；带 key 时自动发送 Bearer token。当前模式写入 `diagnostics.firecrawl_auth_mode`。
 
+指向纯文本文件的 URL（raw.githubusercontent.com、gist，或以 `.md` / `.markdown` / `.txt` / `.rst` 结尾）在 `auto` 下先走 Direct，返回纯文本就原样采用，返回 HTML 再走上面的顺序（41 个对照里 Tavily 有 9 个不到 Direct 的七成）。
+
 Firecrawl 返回的目标页状态码 ≥ 400 时按失败处理，交给下一个 provider（记录在案的 7 次都是错误页）。`final_url` / `redirected` 来自 Firecrawl 的 `metadata.url` 或 Direct 的最终响应；带路径的 URL 落在站点首页时写 warning（gov.cn 用脚本把已删除的页面跳回首页，Firecrawl 跟过去后报 200）。
 
 X 原帖在 `auto` 下不论 key 都先走 Direct（校验 handle、日期、正文；只有主帖）；要 thread、ISO 时间戳、互动数时显式 `--provider firecrawl`（约 30 credits）。单次 `credits_used >= 10` 会在 warnings 中说明成本。额度耗尽后进入冷却，auto 模式跳过 Firecrawl 直到 `retry_after_seconds` 到期。

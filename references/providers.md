@@ -5,7 +5,7 @@ Read this when a result mentions a skipped or failed provider, when configuratio
 ## Provider Order
 
 - `search.js`: Grok Responses runs alongside independent Tavily Search (needs `TAVILY_API_KEY`) and Firecrawl Search (keyless by default, `FIRECRAWL_API_KEY` when set). Extras are never fed into Grok. The default combined extra target is 6; `--extra N` changes it, `--no-extra` disables both extras and the degraded fallback. On `--source x` extras are off unless `--extra N` is given (`extra_mode: "off-x-only"`).
-- `fetch.js --provider auto`: Tavily Extract → Firecrawl Scrape → Direct Fetch. Exception: X post URLs try Direct first regardless of keys (`references/x-search.md`). A Firecrawl page whose target status is 400 or more counts as a failure. `final_url` / `redirected` show where the fetch ended; a deep URL that ends on the site's home page adds a warning, since the page is most likely gone.
+- `fetch.js --provider auto`: Tavily Extract → Firecrawl Scrape → Direct Fetch. Exceptions: X post URLs try Direct first regardless of keys (`references/x-search.md`), and so do URLs that name a plain-text file (`raw.githubusercontent.com`, `gist.githubusercontent.com`, paths ending in `.md` / `.markdown` / `.txt` / `.rst`), taken verbatim when served as text; Tavily returned less than 70% of the text for 9 of 41 such files. A Firecrawl page whose target status is 400 or more counts as a failure. `final_url` / `redirected` show where the fetch ended; a deep URL that ends on the site's home page adds a warning, since the page is most likely gone.
 - `map.js --provider auto`: Tavily Map → Direct Map. An empty Tavily list also falls through to Direct Map.
 - `--responses-openrouter-engine exa` forces a web-only engine on OpenRouter.
 

@@ -312,6 +312,8 @@ Tavily Extract -> Firecrawl Scrape -> Direct Fetch
 
 Direct Fetch is a best-effort fallback for normal HTTP(S) text pages. It strips simple HTML, formats JSON when possible, records redirects, and rejects binary/attachment/oversized responses.
 
+A URL that names a plain-text file (`raw.githubusercontent.com`, `gist.githubusercontent.com`, or a path ending in `.md` / `.markdown` / `.txt` / `.rst`) tries Direct first under `--provider auto`: text served as text is taken verbatim, and an HTML page (such as `github.com/.../blob/x.md`) goes on to the order above. Compared on 41 such URLs on 2026-10-10, Tavily returned less than 70% of the text for 9 of them and as little as 3% (code.claude.com's statusline.md: 1,870 of 67,266 characters).
+
 Firecrawl reports the target page's status with its markdown: a page with a status of 400 or more counts as a failure and goes to the next provider (all seven on record from 2026-09-15 to 10-06 were 404/503 error pages). Firecrawl and Direct both report where the fetch ended in `final_url` / `redirected`; a URL with a path that ends on the site's home page adds a warning, because the page has most likely been removed (gov.cn, for one, sends removed pages to its home page by script).
 
 Firecrawl Scrape uses Keyless without a key and automatically sends a Bearer token when `FIRECRAWL_API_KEY` is configured. The active mode is exposed as `diagnostics.firecrawl_auth_mode`.

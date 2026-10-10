@@ -507,4 +507,77 @@ assert.equal(
   ["Post", "A long line of post text here", "Post", "1.", "1."].join("\n")
 );
 
+// A URL naming a plain-text file goes to Direct first: served as text it comes back verbatim,
+// where Tavily Extract returned under 70% of the text for 9 of 41 such files (2026-10-10). A
+// file-like URL that serves HTML (github.com/.../blob/x.md) goes on to the usual order, and an
+// explicit --provider is left alone.
+let tavilyExtracts = 0;
+await withServer(
+  (req, res) => {
+    req.resume();
+    if (req.url === "/tavily/extract") {
+      tavilyExtracts += 1;
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ results: [{ raw_content: "Tavily's shorter copy" }] }));
+      return;
+    }
+    if (req.url === "/docs/statusline.md") {
+      res.writeHead(200, { "content-type": "text/markdown; charset=utf-8" });
+      res.end(`# Status line\n\n${"full text ".repeat(100)}`);
+      return;
+    }
+    res.writeHead(200, { "content-type": "text/html" });
+    res.end("<title>blob</title><p>GitHub page</p>");
+  },
+  async (base) => {
+    const config = { ...baseConfig, tavilyApiKey: "tavily-key", tavilyApiUrl: `${base}/tavily`, firecrawlApiUrl: base, retryMaxAttempts: 1 };
+    const file = await fetchUrl(`${base}/docs/statusline.md`, config, { provider: "auto" });
+    assert.equal(file.provider, "direct");
+    assert.match(file.content, /full text/);
+    assert.deepEqual(file.tried, [{ provider: "direct", ok: true, skipped: false, plain_text: true }]);
+    assert.equal(tavilyExtracts, 0);
+
+    const blob = await fetchUrl(`${base}/o/r/blob/main/x.md`, config, { provider: "auto" });
+    assert.equal(blob.provider, "tavily");
+    assert.deepEqual(
+      blob.tried.map((attempt) => [attempt.provider, attempt.ok]),
+      [
+        ["direct", false],
+        ["tavily", true],
+      ]
+    );
+    assert.match(blob.tried[0].error, /served text\/html, not plain text/);
+
+    const named = await fetchUrl(`${base}/docs/statusline.md`, config, { provider: "tavily" });
+    assert.equal(named.provider, "tavily");
+  }
+);
+
+// When Tavily and Firecrawl fail too, the HTML Direct already fetched is returned rather than
+// fetched again, and without the X validation warning.
+let pageGets = 0;
+await withServer(
+  (req, res) => {
+    req.resume();
+    if (req.url === "/tavily/extract" || req.url === "/scrape") {
+      res.writeHead(500, { "content-type": "text/plain" });
+      res.end("down");
+      return;
+    }
+    pageGets += 1;
+    res.writeHead(200, { "content-type": "text/html" });
+    res.end("<title>blob</title><p>GitHub page</p>");
+  },
+  async (base) => {
+    const config = { ...baseConfig, tavilyApiKey: "tavily-key", tavilyApiUrl: `${base}/tavily`, firecrawlApiUrl: base, retryMaxAttempts: 1 };
+    const result = await fetchUrl(`${base}/o/r/blob/main/x.md`, config, { provider: "auto" });
+    assert.equal(result.ok, true);
+    assert.equal(result.provider, "direct");
+    assert.match(result.content, /GitHub page/);
+    assert.deepEqual(result.warnings, []);
+    assert.deepEqual(result.tried.at(-1), { provider: "direct", ok: true, skipped: false, reused: true });
+    assert.equal(pageGets, 1);
+  }
+);
+
 console.log("firecrawl fixtures ok");
