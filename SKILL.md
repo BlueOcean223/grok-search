@@ -54,7 +54,7 @@ Every script prints one JSON object, also on failure (non-zero exit, stderr line
 
 - `error`: read `error.message`, `error.code`, `diagnostics.provider_attempts`. Change something before retrying (query, `--provider`, `--model`). `DEADLINE_EXCEEDED`: the whole command hit its time budget (default 240s, `--deadline N`).
 - `diagnostics.warnings` and `diagnostics.provider_attempts` say which providers were skipped (e.g. Firecrawl in cooldown), failed, or produced content, and whether the relay served another model than requested.
-- Search: `answer.text`, then `sources.items` (merged, max 12). `source_type` `citation` = used in the answer, `searched` = only listed; `opened: true` = Grok read the page. `sources.raw_path` always points to the run record (full list, answer, tool calls); read it in chunks only when the cards are not enough. Check `diagnostics.degraded`, `cost_usd`, and `search_budget` (advisory budget vs. calls made).
+- Search: `answer.text`, then `sources.items` (merged, max 12). `source_type` `citation` = used in the answer, `searched` = only listed; `opened: true` = Grok read the page. `sources.raw_path` always points to the run record (full list, answer, tool calls); read it in chunks only when the cards are not enough. Check `diagnostics.degraded`, `diagnostics.cost_usd`, and `diagnostics.search_budget` (advisory budget vs. calls made).
 - Fetch: `content.text`; if `content.truncated`, read `content.full_path` in chunks. stdout stays under 45KB whatever `--max-chars` says; a warning says when that cut the text. `metadata` has title/author/published_at when the provider had them. `diagnostics.run_path` is the run record.
 - Map: `urls`; fetch the few you need.
 
