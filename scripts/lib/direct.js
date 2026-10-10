@@ -3,7 +3,7 @@ import { isXUrl, parseXPostUrl } from "./sources.js";
 
 const DIRECT_FETCH_MAX_BYTES = 2 * 1024 * 1024;
 const DIRECT_ERROR_PREVIEW_BYTES = 1000;
-// Direct Map fetches sitemap.xml and the home page itself; each request gets its own timeout,
+// Direct Map fetches robots.txt, the sitemaps and the page itself; each request gets its own timeout,
 // separate from --timeout, which is Tavily's remote crawl budget (150s by default). A stalled
 // sitemap should not eat most of the 240s command deadline.
 export const DIRECT_MAP_REQUEST_TIMEOUT_SECONDS = 30;
@@ -63,21 +63,87 @@ function uniqueLimited(urls, limit) {
   return out;
 }
 
-function parseSitemapUrls(xml, base, limit) {
-  const baseUrl = new URL(base);
+// Sitemap documents read per map, index files included. A large store's index can list hundreds
+// of child sitemaps, and reading them all would outlast the command deadline.
+const MAX_SITEMAP_DOCUMENTS = 10;
+
+/** The path a map stays under: "/docs" for ".../docs" and ".../docs/", "" for the site root. */
+function mapScope(url) {
+  return new URL(url).pathname.replace(/\/+$/, "");
+}
+
+function inMapScope(candidate, host, scope) {
+  const parsed = new URL(candidate);
+  if (parsed.hostname !== host) return false;
+  const path = parsed.pathname.replace(/\/+$/, "");
+  return !scope || path === scope || path.startsWith(`${scope}/`);
+}
+
+/** Absolute http(s) URLs without fragments; malformed values are dropped. */
+function absoluteUrls(values, base) {
   const urls = [];
-  for (const match of String(xml || "").matchAll(/<loc>\s*([^<]+?)\s*<\/loc>/gi)) {
+  for (const value of values) {
     try {
-      const parsed = new URL(decodeHtmlEntities(match[1].trim()), baseUrl);
+      const parsed = new URL(decodeHtmlEntities(String(value).trim()), base);
       parsed.hash = "";
-      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") continue;
-      if (parsed.hostname !== baseUrl.hostname) continue;
-      urls.push(parsed.toString());
+      if (parsed.protocol === "http:" || parsed.protocol === "https:") urls.push(parsed.toString());
     } catch {
-      // Ignore malformed sitemap entries.
+      // Ignore malformed entries.
     }
   }
-  return uniqueLimited(urls, limit);
+  return urls;
+}
+
+/** The sitemaps a robots.txt declares on its `Sitemap:` lines. */
+function robotsSitemaps(text, base) {
+  return absoluteUrls(
+    [...String(text || "").matchAll(/^[ \t]*sitemap[ \t]*:[ \t]*(\S+)/gim)].map((match) => match[1]),
+    base
+  );
+}
+
+/** A sitemap's <loc> entries, and whether they name further sitemaps (a sitemap index). */
+function sitemapEntries(xml, base) {
+  const text = String(xml || "");
+  return {
+    index: /<sitemapindex[\s>]/i.test(text),
+    locs: absoluteUrls(
+      [...text.matchAll(/<loc>\s*(?:<!\[CDATA\[\s*)?([^<]+?)(?:\s*\]\]>)?\s*<\/loc>/gi)].map((match) => match[1]),
+      base
+    ),
+  };
+}
+
+/**
+ * Page URLs from a site's sitemaps, found the way sitemap tools such as ultimate-sitemap-parser
+ * find them: the sitemaps robots.txt declares and the conventional locations, with index files
+ * expanded level by level. Stops at MAX_SITEMAP_DOCUMENTS documents, or once `enough` of the
+ * URLs pass `keep`.
+ */
+async function readSitemaps(candidates, { timeout, keep, enough }) {
+  const seen = new Set();
+  const pages = [];
+  let queue = candidates;
+  let read = 0;
+  let found = 0;
+  const kept = () => pages.filter(keep).length;
+  while (queue.length && read < MAX_SITEMAP_DOCUMENTS && kept() < enough) {
+    const batch = [...new Set(queue)].filter((url) => !seen.has(url)).slice(0, MAX_SITEMAP_DOCUMENTS - read);
+    for (const url of batch) seen.add(url);
+    read += batch.length;
+    queue = [];
+    for (const doc of await Promise.all(batch.map((url) => fetchTextForMap(url, timeout)))) {
+      if (!doc.ok) continue;
+      const { index, locs } = sitemapEntries(doc.text, doc.final_url);
+      // A 200 page with no <loc> (an HTML page served at /sitemap.xml) is not a sitemap.
+      if (!locs.length) continue;
+      found += 1;
+      if (index) queue.push(...locs);
+      else pages.push(...locs);
+    }
+  }
+  const unread = [...new Set(queue)].filter((url) => !seen.has(url)).length;
+  return { pages, found, unread: kept() < enough ? unread : 0 };
 }
 
 function hrefValues(html) {
@@ -88,28 +154,20 @@ function hrefValues(html) {
   return values;
 }
 
-function parseHtmlLinks(html, pageUrl, limit, maxBreadth) {
-  const baseUrl = new URL(pageUrl);
-  const urls = [];
-  for (const href of hrefValues(html)) {
-    try {
-      const parsed = new URL(decodeHtmlEntities(href.trim()), baseUrl);
-      parsed.hash = "";
-      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") continue;
-      if (parsed.hostname !== baseUrl.hostname) continue;
-      urls.push(parsed.toString());
-      if (urls.length >= maxBreadth) break;
-    } catch {
-      // Ignore malformed hrefs.
-    }
-  }
-  return uniqueLimited(urls, limit);
-}
-
+/**
+ * Candidate URLs for a site, or for the section a URL with a path names. Like a crawler, it
+ * starts from the URL it was given: the links on that page come first, then the site's sitemaps.
+ * A URL with a path keeps to that path and below, as Firecrawl's crawl does by default
+ * ("crawl ignores sublinks that are not children of the URL you provide"). Mapping
+ * www.compshare.cn/docs on 2026-10-10 returned 200 of the site's 891 sitemap URLs: 4 under
+ * /docs, 179 under /images.
+ */
 export async function directMap(url, options = {}) {
   const warnings = [];
   const parsed = new URL(url);
   const baseUrl = parsed.origin;
+  const host = parsed.hostname;
+  const scope = mapScope(url);
   const limit = options.limit || 50;
   const maxBreadth = options.maxBreadth || 20;
   const timeout = options.requestTimeout || DIRECT_MAP_REQUEST_TIMEOUT_SECONDS;
@@ -122,41 +180,44 @@ export async function directMap(url, options = {}) {
     warnings.push("Direct Map only supports max-depth 1; deeper traversal requires Tavily Map.");
   }
 
-  const sitemapUrl = new URL("/sitemap.xml", baseUrl).toString();
-  const sitemap = await fetchTextForMap(sitemapUrl, timeout);
-  if (sitemap.ok) {
-    const results = parseSitemapUrls(sitemap.text, baseUrl, limit);
-    if (results.length) {
-      return {
-        ok: true,
-        provider: "direct",
-        base_url: baseUrl,
-        results,
-        response_time: null,
-        warnings,
-        instructions_ignored: instructionsIgnored,
-      };
-    }
-    warnings.push("Direct Map found sitemap.xml but no same-domain URLs were parsed.");
-  } else {
-    warnings.push(`Direct Map sitemap skipped: ${sitemap.error}`);
-  }
+  const keep = (candidate) => inMapScope(candidate, host, scope);
+  const conventional = [`${baseUrl}/sitemap.xml`, ...(scope ? [`${baseUrl}${scope}/sitemap.xml`] : [])];
+  const [robots, page] = await Promise.all([
+    fetchTextForMap(`${baseUrl}/robots.txt`, timeout),
+    fetchTextForMap(url, timeout),
+  ]);
+  const declared = robots.ok ? robotsSitemaps(robots.text, baseUrl) : [];
+  const sitemaps = await readSitemaps([...declared, ...conventional], { timeout, keep, enough: limit });
+  const links = page.ok ? absoluteUrls(hrefValues(page.text), page.final_url || url) : [];
 
-  const homeUrl = new URL("/", baseUrl).toString();
-  const home = await fetchTextForMap(homeUrl, timeout);
-  if (!home.ok) {
+  if (!page.ok && !sitemaps.found) {
     return {
       ok: false,
       provider: "direct",
       base_url: baseUrl,
       results: [],
-      error: `Direct Map failed: ${home.error}`,
+      error: `Direct Map failed: ${page.error}; no sitemap found`,
       warnings,
       instructions_ignored: instructionsIgnored,
     };
   }
 
-  const results = parseHtmlLinks(home.text, home.final_url || homeUrl, limit, maxBreadth);
+  const results = uniqueLimited([...uniqueLimited(links.filter(keep), maxBreadth), ...sitemaps.pages.filter(keep)], limit);
+  const outside = new Set([...links, ...sitemaps.pages].filter((candidate) => new URL(candidate).hostname === host && !keep(candidate)));
+  if (scope && outside.size) {
+    warnings.push(`Direct Map kept URLs under ${scope}; ${outside.size} other URLs on ${host} were left out. Map ${baseUrl}/ for the whole site.`);
+  }
+  if (page.ok && new URL(page.final_url || url).hostname !== host) {
+    warnings.push(`${url} redirected to ${page.final_url}; map that URL for its pages.`);
+  }
+  if (!page.ok) warnings.push(`Direct Map could not read ${url}: ${page.error}`);
+  if (!sitemaps.found) {
+    warnings.push(`Direct Map found no sitemap (robots.txt, ${conventional.map((candidate) => new URL(candidate).pathname).join(", ")}).`);
+  }
+  if (sitemaps.unread) {
+    warnings.push(`Direct Map read ${MAX_SITEMAP_DOCUMENTS} sitemaps and left ${sitemaps.unread} unread; the list may be incomplete.`);
+  }
+
   return {
     ok: true,
     provider: "direct",

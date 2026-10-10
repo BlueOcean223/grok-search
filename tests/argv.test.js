@@ -1350,6 +1350,36 @@ await withServer(
   }
 );
 
+// Direct Map of a URL with a path keeps to that section: the page's own links first, then the
+// sitemaps robots.txt declares (an index here, expanded), all at /docs or below.
+await withServer(
+  (req, res) => {
+    const site = `http://${req.headers.host}`;
+    const send = (type, body, status = 200) => {
+      res.writeHead(status, { "content-type": type });
+      res.end(body);
+    };
+    if (req.url === "/robots.txt") return send("text/plain", `User-agent: *\nSitemap: ${site}/maps/index.xml\n`);
+    if (req.url === "/maps/index.xml") {
+      return send("application/xml", `<sitemapindex><sitemap><loc>${site}/maps/pages.xml</loc></sitemap></sitemapindex>`);
+    }
+    if (req.url === "/maps/pages.xml") {
+      const locs = [`${site}/docs/a`, `${site}/images/1`, `<![CDATA[${site}/docs/b]]>`, `${site}/images/2`];
+      return send("application/xml", `<urlset>${locs.map((loc) => `<url><loc>${loc}</loc></url>`).join("")}</urlset>`);
+    }
+    if (req.url === "/docs") {
+      return send("text/html", "<a href='/docs/c'>C</a><a href='/pricing'>Pricing</a><a href='/docs/a'>A</a><a href='https://other.example/docs/x'>X</a>");
+    }
+    send("text/plain", "not found", 404);
+  },
+  async (_server, port) => {
+    const site = `http://127.0.0.1:${port}`;
+    const output = parseJson((await runNode(["scripts/map.js", "--provider", "direct", `${site}/docs`])).stdout);
+    assert.deepEqual(output.urls, [`${site}/docs/c`, `${site}/docs/a`, `${site}/docs/b`]);
+    assert.match(output.diagnostics.warnings.join("\n"), /kept URLs under \/docs; 3 other URLs on 127\.0\.0\.1 were left out/);
+  }
+);
+
 // Domain filters given to Grok reach the extra providers too, and an extra that still falls
 // outside them ranks below Grok's in-scope search results instead of displacing them.
 await withServer(

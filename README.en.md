@@ -346,9 +346,9 @@ Provider order for `--provider auto`:
 Tavily Map -> Direct Map
 ```
 
-Without `TAVILY_API_KEY`, Tavily Map is unavailable and `map.js` falls back to Direct Map; it also falls back when Tavily Map returns an empty list (with an explicit `--provider tavily` the empty list is returned with a warning). Direct Map only checks same-site `/sitemap.xml`, then same-domain links on the homepage. It ignores `--instructions` and supports only `--max-depth 1`.
+Without `TAVILY_API_KEY`, Tavily Map is unavailable and `map.js` falls back to Direct Map; it also falls back when Tavily Map returns an empty list (with an explicit `--provider tavily` the empty list is returned with a warning). Direct Map takes the links on the requested page, then the site's sitemaps (those robots.txt declares, `/sitemap.xml`, and `<path>/sitemap.xml` for a URL with a path; sitemap indexes are expanded, up to 10 files). A URL with a path keeps to that path and below, the scope Firecrawl's crawl uses by default, and a warning counts what was left out; map the site root for the whole site. It ignores `--instructions` and supports only `--max-depth 1`.
 
-`--timeout` (default 150s) is the crawl budget handed to Tavily Map; Direct Map's own requests for the sitemap and home page use a separate `--direct-timeout` (default 30s), so one stalled request cannot consume most of the command deadline. Both values are recorded in `diagnostics.options`.
+`--timeout` (default 150s) is the crawl budget handed to Tavily Map; Direct Map's own requests for robots.txt, the sitemaps and the page use a separate `--direct-timeout` (default 30s), so one stalled request cannot consume most of the command deadline. Both values are recorded in `diagnostics.options`.
 
 Successful map output uses `urls` for discovered URLs. Provider, response time, ignored instructions, warnings, attempts, and options live under `diagnostics`, with the run record path under `diagnostics.run_path`.
 

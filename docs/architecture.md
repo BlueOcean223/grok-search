@@ -83,9 +83,9 @@ URL
 ```text
 site URL
   ├─ Tavily Map（配置 key 时）
-  └─ Direct Map
-       ├─ /sitemap.xml
-       └─ 首页同域链接
+  └─ Direct Map（URL 带路径时只保留该路径及其下的 URL）
+       ├─ 请求页面上的同域链接
+       └─ sitemap：robots.txt 声明的、/sitemap.xml、<路径>/sitemap.xml，索引展开（最多 10 个文件）
 ```
 
 Direct Map 刻意保持浅层，不执行 JavaScript，并忽略自然语言过滤指令。
