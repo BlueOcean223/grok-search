@@ -67,16 +67,23 @@ assert.deepEqual(mergedCitation, [
     snippet: "A useful description",
     score: 0.5,
     merged_from: ["firecrawl"],
+    list_ranks: { grok: 0, firecrawl: 0 },
   },
 ]);
-// Existing real values are never overwritten, and an identical duplicate leaves no trace.
+// Existing real values are never overwritten, and an identical duplicate leaves no trace in
+// merged_from. list_ranks still records that Tavily returned the URL, for the card ranking.
 const keptTitle = mergeSources(
-  [{ provider: "grok-responses", url: "https://example.com/a", title: "Original", snippet: "kept" }],
-  [{ provider: "tavily", url: "https://example.com/a", title: "Other", description: "ignored" }]
+  [{ provider: "grok-responses", source_type: "citation", url: "https://example.com/a", title: "Original", snippet: "kept" }],
+  [
+    { provider: "tavily", url: "https://example.com/other" },
+    { provider: "tavily", url: "https://example.com/a", title: "Other", description: "ignored" },
+  ]
 );
 assert.equal(keptTitle[0].title, "Original");
 assert.equal(keptTitle[0].snippet, "kept");
 assert.equal(Object.hasOwn(keptTitle[0], "merged_from"), false);
+assert.deepEqual(keptTitle[0].list_ranks, { grok: 0, tavily: 1 });
+assert.equal(Object.hasOwn(compactSource(keptTitle[0]), "list_ranks"), false);
 // One X post under two URL forms is one card: xAI's /i/status/<id> citation names no author,
 // the answer's /<handle>/status/<id> link does, and the handle lands on the merged card.
 const xMerged = mergeSources([
@@ -185,13 +192,18 @@ assert.deepEqual(
 
 // Grok's list runs cited > opened > searched whatever the input order, and a URL an extra
 // provider also returned (merged into Grok's card) scores in both lists.
-const grokOrder = [
-  { url: "https://g.example/searched", source_type: "searched" },
-  { url: "https://g.example/opened", source_type: "searched", opened: true },
-  { url: "https://g.example/cited", source_type: "citation" },
-  { url: "https://g.example/agreed", source_type: "searched", merged_from: ["tavily"] },
-  { url: "https://t.example/1", provider: "tavily" },
-];
+const grokOrder = mergeSources(
+  [
+    { url: "https://g.example/searched", source_type: "searched" },
+    { url: "https://g.example/opened", source_type: "searched", opened: true },
+    { url: "https://g.example/cited", source_type: "citation" },
+    { url: "https://g.example/agreed", source_type: "searched" },
+  ],
+  [
+    { url: "https://g.example/agreed", provider: "tavily" },
+    { url: "https://t.example/1", provider: "tavily" },
+  ]
+);
 assert.deepEqual(
   selectSources(grokOrder, { maxSources: 2 }).items.map((source) => source.url),
   ["https://g.example/cited", "https://g.example/agreed"]
@@ -200,6 +212,27 @@ assert.deepEqual(
   selectSources(grokOrder, { maxSources: 4 }).items.map((source) => source.url),
   ["https://g.example/opened", "https://g.example/cited", "https://g.example/agreed", "https://t.example/1"]
 );
+
+// The agreement counts whether or not the duplicate brought a field. Firecrawl's first result
+// is Grok's twelfth citation with nothing new: it is shown (before list_ranks it was dropped
+// while Firecrawl's second and third results were shown), and Grok's eleventh gives way.
+const twelve = Array.from({ length: 12 }, (_, i) => ({
+  provider: "grok-responses",
+  source_type: "citation",
+  url: `https://g.example/${i + 1}`,
+  title: `G${i + 1}`,
+  snippet: "s",
+}));
+const agreedPicked = selectSources(
+  mergeSources(twelve, [
+    { provider: "firecrawl", url: "https://g.example/12", title: "Same", description: "same" },
+    { provider: "firecrawl", url: "https://f.example/2", title: "F2", description: "d" },
+    { provider: "firecrawl", url: "https://f.example/3", title: "F3", description: "d" },
+  ]),
+  { maxSources: 12 }
+).items.map((source) => source.url);
+assert.equal(agreedPicked.includes("https://g.example/12"), true);
+assert.equal(agreedPicked.includes("https://g.example/11"), false);
 
 // An extra result outside the requested domains goes last, though it tops its provider's list.
 const domainRanked = [

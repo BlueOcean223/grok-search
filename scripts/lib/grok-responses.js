@@ -1,7 +1,7 @@
 import { authHeaders, requestJson } from "./http.js";
 import { usesWebSearch, usesXSearch } from "./config.js";
 import { getLocalTimeContext, platformPrompt } from "./context.js";
-import { ANSWER_MARKER, searchPrompt, xSearchPrompt } from "./prompts.js";
+import { ANSWER_MARKER_PATTERN, searchPrompt, xSearchPrompt } from "./prompts.js";
 import { isCitationMarker, isXUrl, normalizeSourceUrl, parseXPostUrl } from "./sources.js";
 import { numericField, usageDiagnostics } from "./usage.js";
 
@@ -224,15 +224,16 @@ function extractResponsesText(data) {
  * (grok-4.6, grok-4.6-build and grok-4.7 through the relay); the raw responses on record had it
  * glued to the answer in a single text part, out of reach of the message filter above. grok-4.7
  * opened its answer with the marker in 9 of 9 test runs on 2026-10-10. Without a marker the
- * text is kept whole and `preamble` is null.
+ * text is kept whole and `preamble` is null. Spacing and case may vary ("<!--answer-->"); a
+ * marker matched only exactly would stay in the text with the narration before it.
  */
 function splitAtAnswerMarker(text) {
-  const at = text.lastIndexOf(ANSWER_MARKER);
-  if (at < 0) return { text, preamble: null };
-  const answer = text.slice(at + ANSWER_MARKER.length).trim();
+  const last = [...text.matchAll(ANSWER_MARKER_PATTERN)].at(-1);
+  if (!last) return { text, preamble: null };
+  const answer = text.slice(last.index + last[0].length).trim();
   // A marker at the very end leaves nothing after it; keep everything but the markers then.
-  if (!answer) return { text: text.split(ANSWER_MARKER).join("").trim(), preamble: "" };
-  return { text: answer, preamble: text.slice(0, at).trim() };
+  if (!answer) return { text: text.replace(ANSWER_MARKER_PATTERN, "").trim(), preamble: "" };
+  return { text: answer, preamble: text.slice(0, last.index).trim() };
 }
 
 function collectAnnotations(value, out = []) {

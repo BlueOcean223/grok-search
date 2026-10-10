@@ -529,6 +529,13 @@ assert.deepEqual(
 assert.equal(parseGrokResponses(answerText("<!-- answer -->I'll look up the docs.<!-- answer -->\nThe answer.")).text, "The answer.");
 // A marker with nothing after it cuts nothing.
 assert.equal(parseGrokResponses(answerText("The answer.\n<!-- answer -->")).text, "The answer.");
+// Spacing and case may differ from the prompt's marker; it still cuts and does not stay in the text.
+assert.deepEqual(
+  (({ text, preamble }) => ({ text, preamble }))(parseGrokResponses(answerText("Checking the docs.<!--answer-->\nThe answer."))),
+  { text: "The answer.", preamble: "Checking the docs." }
+);
+assert.equal(parseGrokResponses(answerText("Narration.\n<!--  Answer  -->\nThe answer.")).text, "The answer.");
+assert.equal(parseGrokResponses(answerText("The answer.\n<!--ANSWER-->")).text, "The answer.");
 
 // The relay silently served another model: say so (micuapi returned grok-4.5-build for
 // every grok-4.5 request on 2026-09-08, at two to three times the tool calls).

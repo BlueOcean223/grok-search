@@ -158,22 +158,35 @@ function sourceKey(url) {
   return post?.x_post_id ? `x-post:${post.x_post_id}` : normalizeSourceUrl(url);
 }
 
+/**
+ * Cards merged across channels. `list_ranks` records every result list a URL was in and its
+ * position there ({ grok: 3, tavily: 0 }), duplicates included, for selectSources; `merged_from`
+ * only names providers that filled in a field. compactSource leaves `list_ranks` out.
+ */
 export function mergeSources(...sourceLists) {
   const indexByKey = new Map();
   const merged = [];
+  const nextRank = new Map();
 
   for (const sources of sourceLists) {
     for (const item of sources || []) {
       const url = typeof item?.url === "string" ? item.url.trim() : "";
       if (!url) continue;
+      const list = resultList(item);
+      const rank = nextRank.get(list) ?? 0;
+      nextRank.set(list, rank + 1);
       const key = sourceKey(url);
       const existingIndex = indexByKey.get(key);
       if (existingIndex == null) {
         indexByKey.set(key, merged.length);
-        merged.push({ ...item, url });
+        merged.push({ ...item, url, list_ranks: { [list]: rank } });
         continue;
       }
-      merged[existingIndex] = mergeSourceFields(merged[existingIndex], item);
+      const existing = merged[existingIndex];
+      merged[existingIndex] = {
+        ...mergeSourceFields(existing, item),
+        list_ranks: { [list]: rank, ...existing.list_ranks },
+      };
     }
   }
 
@@ -304,29 +317,30 @@ function grokRank(source) {
   return source?.opened === true ? 1 : 2;
 }
 
-/** The result lists a card was in: Grok's or one extra provider's, plus any merged into it. */
-function resultLists(source) {
-  const own = isExtraSource(source) ? textField(source?.provider) : "grok";
-  return new Set([own, ...(source?.merged_from || [])]);
+/** The result list a source came in: Grok's, or one extra provider's. */
+function resultList(source) {
+  return isExtraSource(source) ? textField(source?.provider) || "extra" : "grok";
 }
 
 /**
  * Reciprocal Rank Fusion over the lists the cards came from: Grok's, in grokRank order, and each
  * extra provider's, in the order it returned them. A card scores 1 / (RRF_K + rank) in every
- * list it is in, so a URL that two channels returned rises.
+ * list it is in, so a URL that two channels returned rises. Membership and order come from
+ * mergeSources' `list_ranks`; a card without it is in its own list, in input order.
  */
 function fusionScores(sources) {
   const lists = new Map();
   sources.forEach((source, index) => {
-    for (const name of resultLists(source)) {
+    const ranks = source?.list_ranks ?? { [resultList(source)]: index };
+    for (const [name, rank] of Object.entries(ranks)) {
       if (!lists.has(name)) lists.set(name, []);
-      lists.get(name).push(index);
+      lists.get(name).push({ index, rank });
     }
   });
   const scores = sources.map(() => 0);
-  for (const [name, indexes] of lists) {
-    if (name === "grok") indexes.sort((a, b) => grokRank(sources[a]) - grokRank(sources[b]) || a - b);
-    indexes.forEach((index, position) => {
+  for (const [name, members] of lists) {
+    members.sort((a, b) => (name === "grok" ? grokRank(sources[a.index]) - grokRank(sources[b.index]) : 0) || a.rank - b.rank);
+    members.forEach(({ index }, position) => {
       scores[index] += 1 / (RRF_K + position + 1);
     });
   }

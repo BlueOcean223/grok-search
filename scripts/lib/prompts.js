@@ -8,6 +8,8 @@ export const SEARCH_BUDGET_X = 4;
 // between tool calls glued to the answer in one text part, and this is where the answer starts.
 // An HTML comment, so it is invisible in rendered Markdown if it is ever left in.
 export const ANSWER_MARKER = "<!-- answer -->";
+// What the parser accepts as that line: the same comment with any spacing or case.
+export const ANSWER_MARKER_PATTERN = /<!--\s*answer\s*-->/gi;
 
 export const searchPrompt = `
 # Role
