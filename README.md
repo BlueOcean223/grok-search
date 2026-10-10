@@ -297,7 +297,7 @@ fetch 默认只返回 12,000 字符 preview（`--max-chars` 调整）。正文�
 ./scripts/fetch.js --offset 12000 https://example.com
 ```
 
-同一个 URL 在 15 分钟内再抓，直接读本地缓存（`<stateDir>/fetch-cache/`），不再请求 provider，参照 Claude Code WebFetch 的 15 分钟缓存。`auto` 只复用之前 `auto` 抓到的结果；显式指定 provider 时，复用该 provider 产出的结果，所以换 provider 重抓仍会真的去请求新的 provider。命中时 `diagnostics.cache` 为 `{ hit, fetched_at, age_seconds }`，`provider_attempts` 为空。失败的结果不缓存；`--no-cache` 强制重抓。依据：截至 2026-10-09 的会话里，各会话抓过的 109 个 URL 中有 12 个在约三分钟内又被抓了一次，原因是 agent 用不同的脚本过滤同一页，或者想看 preview 之后的内容。
+同一个 URL 在 15 分钟内再抓，直接读本地缓存（`<stateDir>/fetch-cache/`），不再请求 provider，参照 Claude Code WebFetch 的 15 分钟缓存。`auto` 只复用之前 `auto` 抓到的结果；显式指定 provider 时，复用该 provider 产出的结果，所以换 provider 重抓仍会真的去请求新的 provider。命中时 `diagnostics.cache` 为 `{ hit, fetched_at, age_seconds }`，`provider_attempts` 为空。失败的结果不缓存，回退得到的结果也不缓存（Firecrawl 或 Tavily 失败之后才拿到的结果，以及两家都失败后用的 Direct 文本），因为失败可能下一次就恢复了；`--no-cache` 强制重抓。截断提示里写的是缓存还剩几分钟，续读时复用第一次写出的全文文件。`--offset` 用在一次新抓取上时（缓存已过期，或用了 `--no-cache`），正文开头会提示这个偏移量可能和之前那份文本对不上。依据：截至 2026-10-09 的会话里，各会话抓过的 109 个 URL 中有 12 个在约三分钟内又被抓了一次，原因是 agent 用不同的脚本过滤同一页，或者想看 preview 之后的内容。
 
 会改变正文读法的提示也写进 `content.text` 开头：跳到站点首页、Direct 只拿到标题、X 页面未通过校验就原样返回。这些提示同时保留在 `diagnostics.warnings` 里。原因是 agent 常常只打印 `content.text`：截至 2026-10-09，Claude Code 里约 105 次调用只打印过 1 次 `diagnostics.warnings`。
 
@@ -307,7 +307,7 @@ fetch 默认只返回 12,000 字符 preview（`--max-chars` 调整）。正文�
 Direct（请求 Markdown）-> Firecrawl Scrape -> Tavily Extract -> 第一步拿到的 Direct 文本
 ```
 
-第一步 Direct 用 `Accept: text/markdown, text/html;q=0.9, */*;q=0.8` 请求页面，返回的不是 HTML 就原样采用（纯文本逐字节保留，JSON 重新缩进）。支持内容协商的站点会直接给出不带导航的 Markdown，例如 code.claude.com、platform.openai.com，以及接入 Cloudflare Markdown for Agents 的站点。纯文本文件、JSON 接口也在这一步拿到。2026-10-10 用记录里的 153 个 HTML URL 试过，45 个返回了 Markdown。
+第一步 Direct 用 `Accept: text/markdown, text/html;q=0.9, */*;q=0.8` 请求页面，返回的不是 HTML 就原样采用（按响应声明的字符集解码，JSON 重新缩进；没声明字符集、又解码不成 UTF-8 的文本交给后面的 provider）。支持内容协商的站点会直接给出不带导航的 Markdown，例如 code.claude.com、platform.openai.com，以及接入 Cloudflare Markdown for Agents 的站点。纯文本文件、JSON 接口也在这一步拿到。2026-10-10 用记录里的 153 个 HTML URL 试过，45 个返回了 Markdown。这一步只是探测，超时 15 秒（同一天对比的 60 个 HTML 页面里，Direct 最慢 6.3 秒），卡住的站点不会拖住后面的 provider。
 
 返回 HTML 的页面交给 Firecrawl。它出错、目标页状态码 ≥ 400、内容为空或被限流（429）时，再交给 Tavily。两家都失败时，用第一步已经拿到的 Direct 文本，不再重复请求。
 
@@ -317,7 +317,7 @@ Firecrawl 排在 Tavily 前面，依据是 2026-10-10 的对比：从运行记�
 - 代价：Firecrawl 每页 1 credit，Tavily basic 每 5 页 1 credit；耗时中位数 Firecrawl 3.5 秒，Tavily 1.9 秒。
 - 用量：按过去 25 天的调用量估算，每月约 146 次抓取会走到 Firecrawl。
 
-Direct Fetch 会做简单的 HTML 清理、尽量格式化 JSON、记录重定向，并拒绝二进制、附件和超大响应；纯文本按原样返回，`content.full_path` 就是原文件。
+Direct Fetch 会做简单的 HTML 清理、尽量格式化 JSON、记录重定向，并拒绝二进制、附件和超大响应；纯文本按声明的字符集解码后原样返回。
 
 Firecrawl 会把目标页的状态码一并返回：状态码 ≥ 400 的页面按失败处理，交给下一个 provider（2026-09-15 至 10-06 记录在案的 7 次全是 404 / 503 错误页）。Firecrawl 和 Direct 都会把最终 URL 写进 `final_url` / `redirected`；带路径的 URL 最终落在站点首页时，`content.text` 开头和 `diagnostics.warnings` 里都会写明，这种情况多半是页面已删除（例如 gov.cn 用脚本把已删除的页面跳回首页）。
 

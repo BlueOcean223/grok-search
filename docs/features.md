@@ -85,13 +85,13 @@ Direct（请求 Markdown）→ Firecrawl Scrape → Tavily Extract → 第一步
 
 Firecrawl 无 key 时走 Keyless；带 key 时自动发送 Bearer token。当前模式写入 `diagnostics.firecrawl_auth_mode`。
 
-第一步 Direct 带 `Accept: text/markdown` 请求，返回的不是 HTML 就原样采用，包括内容协商得到的 Markdown、纯文本文件（逐字节保留）和 JSON（重新缩进）（记录里 153 个 HTML URL 有 45 个返回了 Markdown）。HTML 页先给 Firecrawl，失败、限流或目标页状态码 ≥ 400 时再给 Tavily。Firecrawl 在前的依据是 60 页对比：人工核对后 Tavily 约 20 页缺正文（GitHub issue 页全部缺评论），Firecrawl 1 页。X 页面让 Tavily 在前，因为 Firecrawl 抓一条约 30 credits。
+第一步 Direct 带 `Accept: text/markdown` 请求，返回的不是 HTML 就原样采用，包括内容协商得到的 Markdown、纯文本文件（按声明的字符集解码；解码不成的交给后面的 provider）和 JSON（重新缩进）（记录里 153 个 HTML URL 有 45 个返回了 Markdown）。这一步超时 15 秒（同天对比的 60 个 HTML 页面里 Direct 最慢 6.3 秒）。HTML 页先给 Firecrawl，失败、限流或目标页状态码 ≥ 400 时再给 Tavily。Firecrawl 在前的依据是 60 页对比：人工核对后 Tavily 约 20 页缺正文（GitHub issue 页全部缺评论），Firecrawl 1 页。X 页面让 Tavily 在前，因为 Firecrawl 抓一条约 30 credits。
 
 Firecrawl 返回的目标页状态码 ≥ 400 时按失败处理，交给下一个 provider（记录在案的 7 次都是错误页）。`final_url` / `redirected` 来自 Firecrawl 的 `metadata.url` 或 Direct 的最终响应；带路径的 URL 落在站点首页时，`content.text` 开头和 warnings 里都会写明（gov.cn 用脚本把已删除的页面跳回首页，Firecrawl 跟过去后报 200）。
 
 预览默认 12000 字符。正文被截断时，`content.text` 最后一行是 `[grok-search]` 提示，给出下一段的 `--offset` 和全文路径；跳到首页、Direct 只拿到标题、X 页面未通过校验也会在 `content.text` 开头写一行 `[grok-search]`。这些提示同时保留在 `diagnostics.warnings` 里，因为 agent 常常只打印 `content.text`。
 
-同一 URL 15 分钟内再抓读本地缓存（`<stateDir>/fetch-cache/`），不请求 provider：`auto` 只复用 `auto` 的结果，显式 provider 复用该 provider 的结果；失败不缓存，`--no-cache` 强制重抓，命中时有 `diagnostics.cache`。
+同一 URL 15 分钟内再抓读本地缓存（`<stateDir>/fetch-cache/`），不请求 provider：`auto` 只复用 `auto` 的结果，显式 provider 复用该 provider 的结果；失败和回退结果（Firecrawl 或 Tavily 失败后才拿到的结果、两家都失败后用的 Direct 文本）都不缓存，`--no-cache` 强制重抓，命中时有 `diagnostics.cache`。截断提示写缓存剩余分钟数，续读复用第一次写出的全文文件；`--offset` 用在新抓取上时，开头提示偏移量可能对不上。
 
 X 原帖在 `auto` 下不论 key 都先走 Direct（校验 handle、日期、正文；只有主帖）；要 thread、ISO 时间戳、互动数时显式 `--provider firecrawl`（约 30 credits）。单次 `credits_used >= 10` 会在 warnings 中说明成本。额度耗尽后进入冷却，auto 模式跳过 Firecrawl 直到 `retry_after_seconds` 到期。
 

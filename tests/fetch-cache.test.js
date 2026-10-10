@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
-import { mkdtemp, readdir, readFile, stat, utimes, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, stat, unlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { FETCH_CACHE_TTL_MS, readFetchCache, writeFetchCache } from "../scripts/lib/fetch-cache.js";
+import { FETCH_CACHE_TTL_MS, readFetchCache, rememberFullPath, writeFetchCache } from "../scripts/lib/fetch-cache.js";
 
 const stateDir = await mkdtemp(path.join(tmpdir(), "grok-search-fetch-cache-"));
 const config = { stateDir };
@@ -46,9 +46,54 @@ assert.equal((await readFetchCache(config, url, "firecrawl")).content, "firecraw
 assert.equal((await readFetchCache(config, url, "auto")).content, "tavily text");
 
 // Failures are not written.
-await writeFetchCache(config, "https://example.com/down", "auto", { ok: false, provider: "direct", error: "HTTP 503" });
+assert.equal(await writeFetchCache(config, "https://example.com/down", "auto", { ok: false, provider: "direct", error: "HTTP 503" }), null);
 assert.equal(await readFetchCache(config, "https://example.com/down", "auto"), null);
 assert.equal((await readdir(cacheDir)).length, 1);
+const [postFile] = await readdir(cacheDir);
+
+// Nor are fallbacks: a result served after an extractor failed, or Direct's first copy reused
+// after both did. The failure, such as a Firecrawl 503, may be over by the next call.
+const fallbackUrl = "https://example.com/fallback";
+const directFirst = { provider: "direct", ok: true, skipped: false, content_type: "text/html", used: false };
+assert.equal(
+  await writeFetchCache(config, fallbackUrl, "auto", {
+    ok: true,
+    provider: "direct",
+    content: "nav and body",
+    tried: [directFirst, { provider: "firecrawl", ok: false, skipped: false, error: "HTTP 503" }, { provider: "tavily", ok: false, skipped: true }, { provider: "direct", ok: true, skipped: false, reused: true }],
+  }),
+  null
+);
+assert.equal(
+  await writeFetchCache(config, fallbackUrl, "auto", {
+    ok: true,
+    provider: "tavily",
+    content: "tavily text",
+    tried: [directFirst, { provider: "firecrawl", ok: false, skipped: false, error: "Rate limit exceeded" }, { provider: "tavily", ok: true }],
+  }),
+  null
+);
+assert.equal(await readFetchCache(config, fallbackUrl, "auto"), null);
+// A skipped provider (no key, quota cooldown) and a failed first Direct request are not failures.
+const keptAt = await writeFetchCache(config, fallbackUrl, "auto", {
+  ok: true,
+  provider: "firecrawl",
+  content: "firecrawl text",
+  tried: [{ provider: "direct", ok: false, skipped: false, error: "HTTP 403" }, { provider: "firecrawl", ok: true }],
+});
+assert.equal(typeof keptAt, "string");
+assert.equal((await readFetchCache(config, fallbackUrl, "auto")).content, "firecrawl text");
+
+// The file a cut page's full text went to is kept on the entry, so a continuation reuses it,
+// as long as the file is still there.
+const fullFile = path.join(stateDir, "full.md");
+await writeFile(fullFile, "firecrawl text");
+await rememberFullPath(config, fallbackUrl, keptAt, fullFile);
+assert.equal((await readFetchCache(config, fallbackUrl, "auto")).full_path, fullFile);
+assert.equal((await readFetchCache(config, fallbackUrl, "auto")).cache.fetched_at, keptAt);
+await unlink(fullFile);
+assert.equal(Object.hasOwn(await readFetchCache(config, fallbackUrl, "auto"), "full_path"), false);
+for (const name of await readdir(cacheDir)) if (name !== postFile) await unlink(path.join(cacheDir, name));
 
 // Entries older than the lifetime are ignored, and their files swept on the next write.
 const [file] = await readdir(cacheDir);
@@ -69,4 +114,5 @@ assert.equal((await stat(path.join(cacheDir, left[0]))).mode & 0o777, 0o600);
 assert.equal(await readFetchCache({}, url, "auto"), null);
 await writeFetchCache({}, url, "auto", { ok: true, provider: "direct", content: "x" });
 
+await rm(stateDir, { recursive: true, force: true });
 console.log("fetch cache fixtures ok");

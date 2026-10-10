@@ -70,6 +70,11 @@ export async function mapUrl(url, config, { provider = "auto", ...options } = {}
   return { ok: false, provider, results: [], tried, error: `未知 provider: ${provider}` };
 }
 
+// auto's first Direct request only probes for a non-HTML answer; a page that stalls it should
+// not hold up the extractors. Fetching 60 HTML pages from the run records on 2026-10-10, Direct
+// took 0.9s at the median and 1.8s at p90, the slowest 6.3s; its own default is 60s.
+const DIRECT_PROBE_TIMEOUT_MS = 15_000;
+
 function summarizeFetchFailure(tried, fallback) {
   const details = tried
     .filter((item) => item.error)
@@ -118,10 +123,11 @@ export async function fetchUrl(url, config, { provider = "auto" } = {}) {
     // as served: Markdown from sites that negotiate it (45 of 153 HTML URLs on record did on
     // 2026-10-10, code.claude.com and platform.openai.com among them), plain-text files, and
     // JSON (re-indented).
-    // An HTML page goes to the extractors, and Direct's copy is kept as the last resort.
-    const result = await directFetch(url);
+    // An HTML page goes to the extractors, and Direct's copy is kept as the last resort. So does
+    // text that did not decode (U+FFFD): its charset was not declared and is not UTF-8.
+    const result = await directFetch(url, { timeoutMs: DIRECT_PROBE_TIMEOUT_MS });
     const type = result.metadata?.content_type || "";
-    if (result.ok && !servedHtml(result)) {
+    if (result.ok && !servedHtml(result) && !String(result.content).includes("\uFFFD")) {
       tried.push({ provider: "direct", ok: true, skipped: false, content_type: type });
       return { ...result, tried };
     }

@@ -9,7 +9,8 @@ import path from "node:path";
  * script of their own that failed. In the Claude Code and pi sessions of 2026-08-27..10-09,
  * 12 of the 109 URLs fetched in a session were fetched again within about three minutes
  * (docs.siliconflow.cn 5 times in 37 seconds), and every repeat paid a provider call.
- * Only successful results are kept, so a failure is always retried for real.
+ * Only successful results are kept, and not fallbacks (see fellBack), so a failure is always
+ * retried for real.
  *
  * `auto` reuses what an earlier `auto` fetch of the URL returned. An explicit provider reuses
  * any fresh result that provider produced: asking for Firecrawl after `auto` served Tavily's
@@ -45,7 +46,25 @@ async function freshEntries(file, url) {
   return record.entries.filter((entry) => entry?.result?.ok && Date.parse(entry.cached_at) > cutoff);
 }
 
-/** A result shaped like `fetchUrl`'s, with `cache` set and no provider attempts; null on a miss. */
+// Parallel fetches of one URL each write a whole file; the rename keeps readers from seeing half of one.
+async function writeEntries(file, url, entries) {
+  const temporary = `${file}.${randomBytes(3).toString("hex")}.tmp`;
+  await writeFile(temporary, JSON.stringify({ url, entries }), { encoding: "utf8", mode: 0o600 });
+  await rename(temporary, file);
+}
+
+async function fileExists(file) {
+  try {
+    return (await stat(file)).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * A result shaped like `fetchUrl`'s, with `cache` set and no provider attempts; null on a miss.
+ * `full_path` is the file an earlier run wrote this text to, when it still exists.
+ */
 export async function readFetchCache(config, url, provider) {
   const dir = cacheDir(config);
   if (!dir) return null;
@@ -54,16 +73,31 @@ export async function readFetchCache(config, url, provider) {
     .filter((candidate) => (provider === "auto" ? candidate.requested === "auto" : candidate.result.provider === provider))
     .sort((a, b) => Date.parse(b.cached_at) - Date.parse(a.cached_at))[0];
   if (!entry) return null;
+  const fullPath = typeof entry.full_path === "string" && (await fileExists(entry.full_path)) ? entry.full_path : null;
   return {
     ...entry.result,
     tried: [],
     cache: { hit: true, fetched_at: entry.cached_at, age_seconds: Math.round((Date.now() - Date.parse(entry.cached_at)) / 1000) },
+    ...(fullPath ? { full_path: fullPath } : {}),
   };
 }
 
+/**
+ * Whether the result is a fallback: an extractor (Firecrawl, Tavily) failed before the provider
+ * that answered, or auto returned Direct's first copy after both failed. The failure may be a
+ * rate limit or an outage that is over by the next call, so the fallback is not kept: in a
+ * reproduction on 2026-10-10 (Firecrawl answering 503, no Tavily key), Direct's copy, navigation
+ * and all, was cached under auto, and the next fetch never asked the recovered Firecrawl. A skipped provider (no key, a quota cooldown) does not
+ * count, nor does auto's first Direct request failing, which only probes for a non-HTML answer.
+ */
+function fellBack(result) {
+  return (result.tried || []).some((attempt) => attempt.reused || (attempt.provider !== "direct" && attempt.ok === false && !attempt.skipped));
+}
+
+/** Returns the entry's `cached_at`, or null when the result was not kept. */
 export async function writeFetchCache(config, url, provider, result) {
   const dir = cacheDir(config);
-  if (!dir || !result?.ok) return;
+  if (!dir || !result?.ok || fellBack(result)) return null;
   try {
     await mkdir(dir, { recursive: true, mode: 0o700 });
     await sweep(dir);
@@ -72,13 +106,32 @@ export async function writeFetchCache(config, url, provider, result) {
     const entries = (await freshEntries(file, url)).filter(
       (entry) => !(entry.requested === provider && entry.result.provider === result.provider)
     );
-    entries.push({ requested: provider, cached_at: new Date().toISOString(), result: kept });
-    // Parallel fetches of one URL each write a whole file; the rename keeps readers from seeing half of one.
-    const temporary = `${file}.${randomBytes(3).toString("hex")}.tmp`;
-    await writeFile(temporary, JSON.stringify({ url, entries }), { encoding: "utf8", mode: 0o600 });
-    await rename(temporary, file);
+    const cachedAt = new Date().toISOString();
+    entries.push({ requested: provider, cached_at: cachedAt, result: kept });
+    await writeEntries(file, url, entries);
+    return cachedAt;
   } catch (error) {
     debug(config, `fetch cache write skipped: ${error.message}`);
+    return null;
+  }
+}
+
+/**
+ * Record the file a cut page's full text went to on the entry cached at `cachedAt`, so a run
+ * that continues with --offset points at that file instead of writing the text again.
+ */
+export async function rememberFullPath(config, url, cachedAt, fullPath) {
+  const dir = cacheDir(config);
+  if (!dir || !cachedAt || !fullPath) return;
+  try {
+    const file = entryPath(dir, url);
+    const entries = await freshEntries(file, url);
+    const entry = entries.find((candidate) => candidate.cached_at === cachedAt);
+    if (!entry || entry.full_path === fullPath) return;
+    entry.full_path = fullPath;
+    await writeEntries(file, url, entries);
+  } catch (error) {
+    debug(config, `fetch cache update skipped: ${error.message}`);
   }
 }
 

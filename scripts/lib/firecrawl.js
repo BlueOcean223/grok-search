@@ -131,16 +131,21 @@ export async function firecrawlScrape(url, config, { timeoutMs = 90_000 } = {}) 
     }
 
     const content = data?.data?.markdown || data?.markdown || "";
+    const metadata = firecrawlMetadata(data);
+    const credits = Number.isFinite(data?.data?.metadata?.creditsUsed) ? { credits_used: data.data.metadata.creditsUsed } : {};
+    // Firecrawl returns the markdown of whatever the target served, with the target's status
+    // beside it. All seven pages it returned with a status of 400 or more (2026-09-15 to
+    // 10-06) were error pages, such as "Page Not Found" or Google's "503. That's an error.",
+    // so such a page hands over to the next provider like any other failure. Checked before
+    // the empty-markdown retry: a longer waitFor does not revive a 404.
+    if (Number(metadata.status) >= 400) {
+      return fail(`target page returned HTTP ${metadata.status}`, {
+        metadata,
+        ...(content.trim() ? { error_preview: trimBody(content.trim(), 300) } : {}),
+        ...credits,
+      });
+    }
     if (content.trim()) {
-      const metadata = firecrawlMetadata(data);
-      const credits = Number.isFinite(data?.data?.metadata?.creditsUsed) ? { credits_used: data.data.metadata.creditsUsed } : {};
-      // Firecrawl returns the markdown of whatever the target served, with the target's status
-      // beside it. All seven pages it returned with a status of 400 or more (2026-09-15 to
-      // 10-06) were error pages, such as "Page Not Found" or Google's "503. That's an error.",
-      // so such a page hands over to the next provider like any other failure.
-      if (Number(metadata.status) >= 400) {
-        return fail(`target page returned HTTP ${metadata.status}`, { metadata, error_preview: trimBody(content.trim(), 300), ...credits });
-      }
       const finalUrl = redirectTarget(data, url);
       return {
         ok: true,

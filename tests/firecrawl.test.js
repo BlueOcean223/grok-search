@@ -207,6 +207,27 @@ await withServer(
   }
 );
 
+// An error page with no text fails at once too: the empty-markdown retry (a longer waitFor) does
+// not revive a 404, and each try costs a credit.
+{
+  let scrapes = 0;
+  await withServer(
+    (req, res) => {
+      req.resume();
+      scrapes += 1;
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ success: true, data: { markdown: "", metadata: { statusCode: 404, creditsUsed: 1 } } }));
+    },
+    async (base) => {
+      const scraped = await firecrawlScrape(`${base}/gone`, { ...baseConfig, firecrawlApiUrl: base });
+      assert.equal(scraped.ok, false);
+      assert.equal(scraped.error, "target page returned HTTP 404");
+      assert.equal(Object.hasOwn(scraped, "error_preview"), false);
+      assert.equal(scrapes, 1);
+    }
+  );
+}
+
 // metadata.url is where Firecrawl's browser ended up. gov.cn sends a removed page to its home
 // page by script and Firecrawl reports 200 there (checked 2026-10-10); only this field shows it.
 // A fragment alone is not a redirect.
@@ -255,6 +276,64 @@ await withServer(
     assert.deepEqual(page.notices, []);
   }
 );
+
+// Non-HTML comes back as served, so a Markdown file that is only a heading is that file, not a
+// script shell.
+await withServer(
+  (req, res) => {
+    req.resume();
+    res.writeHead(200, { "content-type": "text/markdown; charset=utf-8" });
+    res.end("# Project\n");
+  },
+  async (base) => {
+    const file = await fetchUrl(`${base}/README.md`, baseConfig, { provider: "direct" });
+    assert.equal(file.content, "# Project\n");
+    assert.deepEqual(file.notices, []);
+  }
+);
+
+// Direct decodes by the declared charset: the Content-Type parameter, else a <meta> tag. A GBK
+// file decoded as UTF-8 was all U+FFFD. Text that still does not decode (no charset declared)
+// goes on to the extractors under auto, with Direct's copy kept as the last resort.
+{
+  // "中文说明" in GBK.
+  const gbk = Buffer.from([0xd6, 0xd0, 0xce, 0xc4, 0xcb, 0xb5, 0xc3, 0xf7]);
+  await withServer(
+    (req, res) => {
+      req.resume();
+      if (req.url === "/scrape") {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ success: true, data: { markdown: "Firecrawl's copy", metadata: { statusCode: 200 } } }));
+        return;
+      }
+      if (req.url === "/declared.txt") {
+        res.writeHead(200, { "content-type": "text/plain; charset=gbk" });
+        res.end(gbk);
+        return;
+      }
+      if (req.url === "/meta.html") {
+        res.writeHead(200, { "content-type": "text/html" });
+        res.end(Buffer.concat([Buffer.from('<html><head><meta charset="gbk"><title>t</title></head><body><p>'), gbk, Buffer.from("</p></body></html>")]));
+        return;
+      }
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.end(gbk);
+    },
+    async (base) => {
+      const config = { ...baseConfig, firecrawlApiUrl: base, retryMaxAttempts: 1 };
+      const declared = await fetchUrl(`${base}/declared.txt`, config, { provider: "auto" });
+      assert.equal(declared.provider, "direct");
+      assert.equal(declared.content, "中文说明");
+
+      const meta = await fetchUrl(`${base}/meta.html`, config, { provider: "direct" });
+      assert.match(meta.content, /中文说明/);
+
+      const undeclared = await fetchUrl(`${base}/undeclared.txt`, config, { provider: "auto" });
+      assert.equal(undeclared.provider, "firecrawl");
+      assert.deepEqual(undeclared.tried[0], { provider: "direct", ok: true, skipped: false, content_type: "text/plain", used: false });
+    }
+  );
+}
 
 // HTTP 200 with malformed JSON: a stable bad body is not retried.
 requests = 0;

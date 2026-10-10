@@ -158,8 +158,11 @@ export function writeRunRecordSync(config, { kind, label, record }) {
   }
 }
 
-/** Up to `maxChars` characters from `offset`; anything less than the whole text also goes to a file. */
-export async function previewText(config, { kind, provider, label, content, maxChars, offset = 0, extension = "txt" }) {
+/**
+ * Up to `maxChars` characters from `offset`; anything less than the whole text also goes to a
+ * file. `fullPath` names a file that already holds this text (an earlier run's), used instead.
+ */
+export async function previewText(config, { kind, provider, label, content, maxChars, offset = 0, extension = "txt", fullPath = null }) {
   const text = String(content ?? "");
   const start = Math.min(Math.max(0, offset), text.length);
   const limit = Number.isFinite(maxChars) ? Math.max(0, maxChars) : text.length;
@@ -168,7 +171,7 @@ export async function previewText(config, { kind, provider, label, content, maxC
   const slice = text.slice(start, end);
   const preview = end < text.length ? slice.trimEnd() : slice;
   const fullOutputPath = truncated
-    ? await writeFullOutput(config, { kind, provider, label, content: text, extension })
+    ? (fullPath ?? (await writeFullOutput(config, { kind, provider, label, content: text, extension })))
     : null;
 
   return {

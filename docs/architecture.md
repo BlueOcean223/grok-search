@@ -111,7 +111,7 @@ Direct Map 刻意保持浅层，不执行 JavaScript，并忽略自然语言过�
 
 长文本在 stdout 中返回 preview，完整内容按需写入输出目录。preview 先按 `--max-chars`（字符，fetch 从 `--offset` 起算）截，再按 `STDOUT_BUDGET_BYTES`（45KB，整个 JSON 的 UTF-8 字节）截：pi 的 bash 工具只保留最后 50KB 的整行，单行的长正文超限会连同它上面的行一起丢掉；`--full-sources` 时其余字段已超预算，不截。会改变正文读法的 warning 同时以 `[grok-search]` 开头的行写进正文（`lib/output.js` 的 `withNotices`）：截断写在末尾，fetch 给出下一段的 `--offset` 和全文路径；跳到首页、Direct 只拿到标题、X 页面未通过校验写在开头。`fitTextToStdoutBudget` 截短时只截正文、保留这些行，`chars` 只算正文。原因是 agent 常常只打印 `content.text` / `answer.text`（截至 2026-10-09，Claude Code 约 105 次调用只打印过 1 次 warnings）。每次调用另写一份运行记录（`schema_version: 2`，成功 / 失败 / deadline 都写；成功时在 stdout 截断之后写，带 `printed_answer` / `printed_content`），search 通过 `sources.raw_path`、fetch / map 通过 `diagnostics.run_path` 引用；`GROK_RUN_LOG=off` 关闭。`grok_tool_calls[].source_count` 是中转挂在每个 call 上的累积值，不能做逐次归因。
 
-fetch 成功结果在 `<stateDir>/fetch-cache/` 保留 15 分钟（`lib/fetch-cache.js`，与 Claude Code WebFetch 的缓存时长相同）：每个 URL 一个文件，按 sha256 命名，写临时文件再 rename；`auto` 只复用 `auto` 的结果，显式 provider 复用该 provider 产出的结果；只存正文、元数据、warnings 和 notices，不存 `credits_used` 等成本字段，命中时 `provider_attempts` 为空；失败不缓存，过期文件在下次写入时清理；`--no-cache` 跳过读取。
+fetch 成功结果在 `<stateDir>/fetch-cache/` 保留 15 分钟（`lib/fetch-cache.js`，与 Claude Code WebFetch 的缓存时长相同）：每个 URL 一个文件，按 sha256 命名，写临时文件再 rename；`auto` 只复用 `auto` 的结果，显式 provider 复用该 provider 产出的结果；只存正文、元数据、warnings 和 notices，不存 `credits_used` 等成本字段，命中时 `provider_attempts` 为空；失败和回退结果都不缓存（`fellBack`：提取器失败之后才拿到的结果、复用的 Direct 文本），条目记下截断页面的 `full_path` 供续读复用，过期文件在下次写入时清理；`--no-cache` 跳过读取。
 
 ## Provider 边界
 

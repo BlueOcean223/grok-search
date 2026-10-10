@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -14,7 +14,8 @@ async function runNode(args, env = {}) {
   // Provider cooldowns and the fetch cache persist across commands. Each command gets its own
   // state dir, so one fixture's quota failure or cached page (a reused port serves another
   // fixture's URL) cannot leak into the next; a test that needs state passes GROK_STATE_DIR.
-  const stateDir = await mkdtemp(path.join(tmpdir(), "grok-search-test-state-"));
+  // The command's own dir is removed afterwards.
+  const stateDir = env.GROK_STATE_DIR ? null : await mkdtemp(path.join(tmpdir(), "grok-search-test-state-"));
   try {
     const result = await execFileAsync("node", args, {
       cwd: process.cwd(),
@@ -22,7 +23,7 @@ async function runNode(args, env = {}) {
         ...process.env,
         HOME: testHome,
         USERPROFILE: testHome,
-        GROK_STATE_DIR: stateDir,
+        ...(stateDir ? { GROK_STATE_DIR: stateDir } : {}),
         TAVILY_API_KEY: "",
         FIRECRAWL_API_KEY: "",
         TAVILY_API_URL: "",
@@ -41,6 +42,8 @@ async function runNode(args, env = {}) {
     return { code: 0, stdout: result.stdout, stderr: result.stderr };
   } catch (error) {
     return { code: error.code, stdout: error.stdout || "", stderr: error.stderr || "" };
+  } finally {
+    if (stateDir) await rm(stateDir, { recursive: true, force: true });
   }
 }
 
@@ -211,9 +214,10 @@ await withServer(
       let output = await fetchJson("--provider", "direct", "--max-chars", "5000");
       assert.equal(requests, 1);
       assert.equal(Object.hasOwn(output.diagnostics, "cache"), false);
-      assert.match(output.content.text, /rerun with --offset 5000 /);
+      assert.match(output.content.text, /rerun with --offset 5000 \(cached for 15 minutes\)/);
       // Non-HTML comes back as served, final newline included.
       assert.equal((await readFile(output.content.full_path, "utf8")).length, 15_001);
+      const firstFullPath = output.content.full_path;
 
       output = await fetchJson("--provider", "direct", "--max-chars", "5000", "--offset", "5000");
       assert.equal(requests, 1);
@@ -227,6 +231,8 @@ await withServer(
       const record = JSON.parse(await readFile(output.diagnostics.run_path, "utf8"));
       assert.equal(record.diagnostics.cache.hit, true);
       assert.equal(record.printed_content.offset, 5000);
+      // The continuation points at the file the first run wrote instead of writing the text again.
+      assert.equal(output.content.full_path, firstFullPath);
 
       // The last part: nothing left to point at.
       output = await fetchJson("--provider", "direct", "--offset", "10000");
@@ -238,10 +244,24 @@ await withServer(
       assert.equal(output.content.text, "[grok-search] --offset 99999 is past the end of the text, which has 15001 characters.");
       assert.match(output.diagnostics.warnings.join("\n"), /past the end/);
 
-      output = await fetchJson("--provider", "direct", "--no-cache");
+      // The hint names how long the cached copy has left, not the full lifetime.
+      const cacheDir = path.join(cacheState, "fetch-cache");
+      const [cacheFile] = await readdir(cacheDir);
+      const cachedRecord = JSON.parse(await readFile(path.join(cacheDir, cacheFile), "utf8"));
+      for (const entry of cachedRecord.entries) entry.cached_at = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+      await writeFile(path.join(cacheDir, cacheFile), JSON.stringify(cachedRecord));
+      output = await fetchJson("--provider", "direct", "--max-chars", "5000", "--offset", "5000");
+      assert.equal(requests, 1);
+      assert.match(output.content.text, /rerun with --offset 10000 \(cached for 5 minutes\)/);
+
+      // --offset on a new fetch says the offset may not line up with an earlier copy.
+      output = await fetchJson("--provider", "direct", "--no-cache", "--max-chars", "5000", "--offset", "5000");
       assert.equal(requests, 2);
       assert.equal(output.diagnostics.options.no_cache, true);
       assert.equal(Object.hasOwn(output.diagnostics, "cache"), false);
+      assert.match(output.content.text, /^\[grok-search\] This is a new fetch of the page, not the cached copy/);
+      assert.match(output.diagnostics.warnings.join("\n"), /--offset 5000 does not continue where that fetch stopped/);
+      assert.match(output.content.text, /rerun with --offset 10000 \(cached for 15 minutes\)/);
 
       // auto reuses only what an auto fetch returned, not the --provider direct copies above.
       output = await fetchJson();

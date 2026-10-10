@@ -245,9 +245,39 @@ function isTextualContentType(contentType) {
   ].includes(type);
 }
 
+/**
+ * The charset a response declares: the Content-Type parameter, else, for markup, a <meta> tag or
+ * the XML declaration within the first 1024 bytes (the window of the HTML prescan). Null if none.
+ */
+function declaredCharset(contentType, bytes) {
+  const header = /;\s*charset\s*=\s*["']?([\w.:-]+)/i.exec(contentType || "");
+  if (header) return header[1];
+  if (contentType && !/html|xml/i.test(contentType)) return null;
+  const head = Buffer.from(bytes.subarray(0, 1024)).toString("latin1");
+  const markup = /<meta\b[^>]*\bcharset\s*=\s*["']?\s*([\w.:-]+)/i.exec(head) || /^\s*<\?xml\b[^>]*\bencoding\s*=\s*["']([\w.:-]+)/i.exec(head);
+  return markup ? markup[1] : null;
+}
+
+/**
+ * Text decoded by its declared charset; UTF-8 when none is declared or the label is unknown. A GBK
+ * text file decoded as UTF-8 came back as U+FFFD for every character.
+ */
+function decodeText(bytes, contentType) {
+  const charset = declaredCharset(contentType, bytes);
+  if (charset) {
+    try {
+      return new TextDecoder(charset).decode(bytes);
+    } catch {
+      // A label TextDecoder does not know; fall back to UTF-8.
+    }
+  }
+  return new TextDecoder("utf-8").decode(bytes);
+}
+
 async function readTextWithLimit(response, limitBytes) {
+  const contentType = response.headers.get("content-type") || "";
   const reader = response.body?.getReader();
-  if (!reader) return { text: await response.text(), exceeded: false };
+  if (!reader) return { text: decodeText(new Uint8Array(await response.arrayBuffer()), contentType), exceeded: false };
 
   const chunks = [];
   let total = 0;
@@ -275,7 +305,7 @@ async function readTextWithLimit(response, limitBytes) {
     bytes.set(chunk, offset);
     offset += chunk.byteLength;
   }
-  return { text: new TextDecoder("utf-8", { fatal: false }).decode(bytes), exceeded };
+  return { text: decodeText(bytes, contentType), exceeded };
 }
 
 function decodeHtmlEntities(text) {
@@ -525,10 +555,12 @@ export async function directFetch(url, options = {}) {
     const content = renderDirectContent(body.text, contentType, finalUrl);
     // HTML gets its <title> as a "# " line, so an empty page still yields text. Reddit served
     // a script-only shell on 2026-10-08 and the fetch came back as just "# Reddit". A notice,
-    // not just a warning: it says the text is not the page.
-    const notices = content.replace(/^# [^\n]*\n*/, "").trim()
-      ? []
-      : ["Direct Fetch got no text beyond the page title; the page may need JavaScript or block automated access."];
+    // not just a warning: it says the text is not the page. Other types come back as served, so a
+    // Markdown file that is only a heading is that file.
+    const titleOnly = /html/i.test(contentType) && !content.replace(/^# [^\n]*\n*/, "").trim();
+    const notices = titleOnly
+      ? ["Direct Fetch got no text beyond the page title; the page may need JavaScript or block automated access."]
+      : [];
 
     return finish({
       ok: true,

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { loadConfig } from "./lib/config.js";
 import { startDeadline } from "./lib/deadline.js";
-import { FETCH_CACHE_TTL_MS, readFetchCache, writeFetchCache } from "./lib/fetch-cache.js";
+import { FETCH_CACHE_TTL_MS, readFetchCache, rememberFullPath, writeFetchCache } from "./lib/fetch-cache.js";
 import {
   cleanupOutputDir,
   fitTextToStdoutBudget,
@@ -202,6 +202,7 @@ async function publicResult(args, result, config, durationMs, notices) {
     maxChars: args.maxChars,
     offset: args.offset,
     extension: "md",
+    fullPath: result.full_path ?? null,
   });
 
   return {
@@ -224,34 +225,48 @@ async function publicResult(args, result, config, durationMs, notices) {
 /**
  * Where the rest of a cut page is. Agents asked for a larger --max-chars to see past a preview
  * (a CrowdStrike post whose first 29,618 characters were navigation, 2026-10-08), printing the
- * start again; --offset continues from the cut, and the cache makes it free.
+ * start again; --offset continues from the cut, and the cache makes it free. `cacheMinutes` is
+ * how long the cached copy has left; the line names the cache only while one is there.
  */
-function continueNotice(content, shownChars) {
+function continueNotice(content, shownChars, cacheMinutes) {
   const end = content.offset + shownChars;
   if (end >= content.original_chars) return null;
-  return `Showing characters ${content.offset}–${end} of ${content.original_chars}. For the rest, rerun with --offset ${end} (cached for ${FETCH_CACHE_TTL_MS / 60000} minutes) or read ${content.full_path}.`;
+  const cached = cacheMinutes >= 1 ? ` (cached for ${cacheMinutes} minutes)` : "";
+  return `Showing characters ${content.offset}–${end} of ${content.original_chars}. For the rest, rerun with --offset ${end}${cached} or read ${content.full_path}.`;
 }
 
 /**
  * Put the notices into content.text and keep the whole JSON within the stdout budget:
  * `--max-chars` counts characters, what the agent's shell keeps is bytes of the whole JSON.
- * `content.chars` counts the page text shown, not the notices.
+ * `content.chars` counts the page text shown, not the notices. `cachedAt` is when the cached copy
+ * of this text was stored, null when there is none.
  */
-async function finishContent(config, output, result, notices) {
+async function finishContent(config, output, result, notices, cachedAt) {
   const content = output.content;
   const requestedOffset = output.diagnostics.options.offset;
+  const cacheMinutes = cachedAt ? Math.round((Date.parse(cachedAt) + FETCH_CACHE_TTL_MS - Date.now()) / 60000) : 0;
   const lead = [...notices];
+  const warn = (message) => {
+    lead.push(message);
+    output.diagnostics.warnings.push(message);
+  };
   if (requestedOffset > content.original_chars) {
-    lead.push(`--offset ${requestedOffset} is past the end of the text, which has ${content.original_chars} characters.`);
-    output.diagnostics.warnings.push(lead.at(-1));
+    warn(`--offset ${requestedOffset} is past the end of the text, which has ${content.original_chars} characters.`);
   }
-  const compose = (text) => withNotices(text, { lead, tail: [continueNotice(content, text.length)].filter(Boolean) });
+  // Offsets count characters of one copy of the page. A new fetch (the cached copy expired, or
+  // auto went to another provider this time) may hold different text.
+  if (requestedOffset > 0 && !result.cache) {
+    warn(
+      `This is a new fetch of the page, not the cached copy an earlier --offset hint referred to; if the text changed, --offset ${requestedOffset} does not continue where that fetch stopped.`
+    );
+  }
+  const compose = (text) => withNotices(text, { lead, tail: [continueNotice(content, text.length, cacheMinutes)].filter(Boolean) });
   const kept = await fitTextToStdoutBudget(
     output,
     content,
     "text",
     async () => {
-      content.full_path ??= await writeFullOutput(config, {
+      content.full_path ??= result.full_path ?? await writeFullOutput(config, {
         kind: "fetch",
         provider: result.provider,
         label: output.final_url,
@@ -338,12 +353,13 @@ try {
     const startedAtMs = Date.now();
     const cached = args.noCache ? null : await readFetchCache(config, args.url, args.provider);
     const result = cached ?? (await fetchUrl(args.url, config, { provider: args.provider }));
-    if (!cached) await writeFetchCache(config, args.url, args.provider, result);
+    const cachedAt = cached ? cached.cache.fetched_at : await writeFetchCache(config, args.url, args.provider, result);
     const notices = contentNotices(args, result);
     const output = await publicResult(args, result, config, Date.now() - startedAtMs, notices);
     const runPath = runRecordPath(config, { kind: "fetch", label: result.final_url || args.url });
     if (runPath) output.diagnostics.run_path = runPath;
-    if (output.content) await finishContent(config, output, result, notices);
+    if (output.content) await finishContent(config, output, result, notices, cachedAt);
+    if (output.content?.full_path) await rememberFullPath(config, args.url, cachedAt, output.content.full_path);
     if (!(await writeRunRecord(config, { at: runPath, record: runRecord(config, args, output, result) }))) {
       delete output.diagnostics.run_path;
     }
