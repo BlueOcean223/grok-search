@@ -355,7 +355,7 @@ map 成功输出使用 `urls` 表示发现的 URL。provider、response time、i
 
 设置 `GROK_OUTPUT_DIR` 可以覆盖该路径。每次运行都会 best-effort 清理输出目录中超过 30 天的 `grok-search-*` 文件。
 
-除 preview 溢出文件外，每次调用还会写一份运行记录 `grok-search-<ts>-run-<kind>-<label>-<rand>.json`（`schema_version: 2`，权限 0600），成功、失败、`DEADLINE_EXCEEDED` 都写；`GROK_RUN_LOG=off` 或 `runLog: false` 关闭。search 记录含脱敏 argv、query、instructions、生效 options、完整 answer、未裁剪 sources、`grok_tool_calls`、diagnostics；fetch 记录含正文全文、metadata、provider_attempts；map 记录含 urls。记录在 stdout 截断之后才写，所以带着 agent 实际看到的 warnings，`printed_answer` / `printed_content` 记下 stdout 里正文的长度、是否截断和全文路径。`GROK_DEBUG_RAW=1` 或 `--full-sources` 时再附 `grok_raw`。
+除 preview 溢出文件外，每次调用还会写一份运行记录 `grok-search-<ts>-run-<kind>-<label>-<rand>.json`（`schema_version: 2`，权限 0600），成功、失败、`DEADLINE_EXCEEDED` 都写；`GROK_RUN_LOG=off` 或 `runLog: false` 关闭。search 记录含脱敏 argv、query、instructions、生效 options、完整 answer、`answer_preamble`（答案标记前被切掉的过场话，没有标记时为 null）、未裁剪 sources、`grok_tool_calls`、diagnostics；fetch 记录含正文全文、metadata、provider_attempts；map 记录含 urls。记录在 stdout 截断之后才写，所以带着 agent 实际看到的 warnings，`printed_answer` / `printed_content` 记下 stdout 里正文的长度、是否截断和全文路径。`GROK_DEBUG_RAW=1` 或 `--full-sources` 时再附 `grok_raw`。
 
 只有 preview 不够时才读取这些路径：
 

@@ -804,6 +804,7 @@ async function grokChannel(args, config, searchOptions) {
     endpoint: grok.endpoint,
     model: grok.model,
     answer: grok.content,
+    answer_preamble: grok.preamble ?? null,
     sources: grok.sources,
     tool_calls: toolCalls,
     warnings,
@@ -1060,6 +1061,8 @@ async function publicResult(args, config) {
       model: grok.model,
       options: diagnostics.options,
       answer: grok.answer,
+      // Text before the answer marker, cut from the answer (null when the model wrote none).
+      answer_preamble: grok.answer_preamble ?? null,
       // What stdout carried of the answer: its length and, when cut, where the full text went.
       printed_answer: { chars: output.answer.chars, truncated: output.answer.truncated, full_path: output.answer.full_path },
       sources: {

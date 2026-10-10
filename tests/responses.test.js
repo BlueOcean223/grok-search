@@ -506,6 +506,29 @@ assert.equal(twoPartParsed.text.startsWith("Part one."), true);
 assert.equal(twoPartParsed.text.endsWith("Part two."), true);
 const singleParsed = parseGrokResponses({ output: [{ type: "message", content: [{ type: "output_text", text: "Short only." }] }] });
 assert.equal(singleParsed.text, "Short only.");
+assert.equal(singleParsed.preamble, null);
+
+// Narration glued to the answer in one text part (grok-4.7, 2026-10-10) is cut at the answer
+// marker the prompt asks for, and kept aside. Links in it are not citations.
+const answerText = (text) => ({ output: [{ type: "message", content: [{ type: "output_text", text }] }] });
+assert.equal(buildResponsesBody("q", baseOptions, { apiProvider: "xai" }).input[0].content.includes("<!-- answer -->"), true);
+const markedParsed = parseGrokResponses(
+  answerText("我去查 [官方定价页](https://a.example/pricing)，核对价格。<!-- answer -->\n北京地域按量计费，见 [价格](https://a.example/p).")
+);
+assert.equal(markedParsed.text, "北京地域按量计费，见 [价格](https://a.example/p).");
+assert.equal(markedParsed.preamble, "我去查 [官方定价页](https://a.example/pricing)，核对价格。");
+assert.deepEqual(
+  markedParsed.sources.filter((source) => source.source_type === "citation").map((source) => source.url),
+  ["https://a.example/p"]
+);
+// A marker at the very start leaves an empty preamble; the last of several markers wins.
+assert.deepEqual(
+  (({ text, preamble }) => ({ text, preamble }))(parseGrokResponses(answerText("<!-- answer -->\nThe answer."))),
+  { text: "The answer.", preamble: "" }
+);
+assert.equal(parseGrokResponses(answerText("<!-- answer -->I'll look up the docs.<!-- answer -->\nThe answer.")).text, "The answer.");
+// A marker with nothing after it cuts nothing.
+assert.equal(parseGrokResponses(answerText("The answer.\n<!-- answer -->")).text, "The answer.");
 
 // The relay silently served another model: say so (micuapi returned grok-4.5-build for
 // every grok-4.5 request on 2026-09-08, at two to three times the tool calls).

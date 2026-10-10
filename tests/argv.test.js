@@ -487,7 +487,7 @@ function xPayload() {
         content: [
           {
             type: "output_text",
-            text: "X answer.",
+            text: "Searching X for the post.<!-- answer -->\nX answer.",
             annotations: [{ url: "https://x.com/xai/status/2087942296721559607", title: "1" }],
           },
         ],
@@ -572,6 +572,8 @@ await withServer(
     assert.equal(record.kind, "search");
     assert.equal(record.query, "mock query");
     assert.equal(record.answer, "X answer.");
+    // The narration before the answer marker is cut from the answer and kept in the record only.
+    assert.equal(record.answer_preamble, "Searching X for the post.");
     assert.equal(record.options.search_source, "x");
     assert.equal(record.diagnostics.responses_x_search_calls, 8);
     assert.equal(record.sources.items.length, 1);

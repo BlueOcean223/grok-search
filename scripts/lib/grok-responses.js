@@ -1,7 +1,7 @@
 import { authHeaders, requestJson } from "./http.js";
 import { usesWebSearch, usesXSearch } from "./config.js";
 import { getLocalTimeContext, platformPrompt } from "./context.js";
-import { searchPrompt, xSearchPrompt } from "./prompts.js";
+import { ANSWER_MARKER, searchPrompt, xSearchPrompt } from "./prompts.js";
 import { isCitationMarker, isXUrl, normalizeSourceUrl, parseXPostUrl } from "./sources.js";
 import { numericField, usageDiagnostics } from "./usage.js";
 
@@ -216,6 +216,23 @@ function extractResponsesText(data) {
   }
 
   return stripRenderMarkup(texts.join("\n\n"));
+}
+
+/**
+ * The text after the last ANSWER_MARKER, and what came before it. Narration between tool calls
+ * ("我先检索…", "I'll look up…") opened the answer in 18 of 82 searches from 2026-10-02 to 10-10
+ * (grok-4.6, grok-4.6-build and grok-4.7 through the relay); the raw responses on record had it
+ * glued to the answer in a single text part, out of reach of the message filter above. grok-4.7
+ * opened its answer with the marker in 9 of 9 test runs on 2026-10-10. Without a marker the
+ * text is kept whole and `preamble` is null.
+ */
+function splitAtAnswerMarker(text) {
+  const at = text.lastIndexOf(ANSWER_MARKER);
+  if (at < 0) return { text, preamble: null };
+  const answer = text.slice(at + ANSWER_MARKER.length).trim();
+  // A marker at the very end leaves nothing after it; keep everything but the markers then.
+  if (!answer) return { text: text.split(ANSWER_MARKER).join("").trim(), preamble: "" };
+  return { text: answer, preamble: text.slice(0, at).trim() };
 }
 
 function collectAnnotations(value, out = []) {
@@ -548,7 +565,7 @@ function usageToolCounts(data) {
 
 export function parseGrokResponses(data, { defaultTool = "web_search", xEnabled = false, requestedModel = "" } = {}) {
   const warnings = [];
-  const text = extractResponsesText(data);
+  const { text, preamble } = splitAtAnswerMarker(extractResponsesText(data));
   // Relays substitute models silently: one served grok-4.5-build for every grok-4.5 request
   // (2026-09-08), at two to three times the tool calls and cost. Say so when it happens.
   const servedModel = textField(data?.model);
@@ -573,6 +590,7 @@ export function parseGrokResponses(data, { defaultTool = "web_search", xEnabled 
 
   return {
     text,
+    preamble,
     sources,
     diagnostics: {
       ...usageDiagnostics(data),
@@ -628,6 +646,7 @@ export async function searchGrokResponses(query, options, config) {
   return {
     model: options.model,
     content: parsed.text,
+    preamble: parsed.preamble,
     sources: parsed.sources,
     endpoint: "responses",
     diagnostics: parsed.diagnostics,
