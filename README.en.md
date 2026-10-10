@@ -186,7 +186,7 @@ Supported variables:
 | `GROK_RUN_LOG` | `runLog` | No | all scripts | Default `true`: every command writes one run-record JSON. `off` / `false` disables it, and `sources.raw_path` / `diagnostics.run_path` become null. |
 | `GROK_DEBUG_RAW` | — | No | `search.js` | Env only. `1` embeds the redacted full Grok response as `grok_raw` in the run record (`--full-sources` does the same). |
 | `GROK_DEBUG` | — | No | all scripts | Env only. `true` prints retry/cleanup/proxy debug logs to stderr. |
-| `GROK_PROXY` | — | No | all scripts | Env only. Explicit proxy URL for this tool, or `off`/`direct` to disable proxy use. |
+| `GROK_PROXY` | `proxy` | No | all scripts | Explicit proxy URL for this tool, or `off`/`direct` to disable proxy use. |
 
 OpenRouter uses the `openrouter:web_search` server tool and does not append `:online` to model names.
 

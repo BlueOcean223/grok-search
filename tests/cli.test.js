@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
-import { httpUrl, parseArgv } from "../scripts/lib/cli.js";
+import { applyConfigDefaults, httpUrl, parseArgv, usageText } from "../scripts/lib/cli.js";
 
 const OPTIONS = {
   name: { flag: "--name", type: "string" },
@@ -99,5 +99,63 @@ const finished = parse(["--count", "2", "q"], {
 });
 assert.equal(finished.doubled, 4);
 throwsWith(() => parse(["--count", "2", "--verbose", "q"], { finish: (args) => { if (args.verbose) throw new Error("conflict"); } }), /conflict/);
+
+// Config fills what the flags left at their defaults, and only that.
+{
+  const options = {
+    model: { flag: "--model", type: "string", config: "grokModel" },
+    turns: { flag: "--turns", type: "int", min: 1, config: "maxTurns" },
+    images: { flag: "--images", off: "--no-images", type: "toggle", config: "images" },
+    chars: { flag: "--chars", type: "int", min: 0, default: 100 },
+    alias: { flags: ["--fast"], type: "const", target: "model", value: "fast" },
+  };
+  const config = { grokModel: "grok-4.3", maxTurns: 3, images: true };
+  const filled = applyConfigDefaults(parseArgv(["q"], { options }), options, config);
+  assert.deepEqual(filled, { model: "grok-4.3", turns: 3, images: true, chars: 100 });
+  const given = applyConfigDefaults(parseArgv(["--model", "m", "--turns", "1", "--no-images", "--chars", "5"], { options }), options, config);
+  assert.deepEqual(given, { model: "m", turns: 1, images: false, chars: 5 });
+}
+
+// Usage comes from the table: every documented flag in the synopsis (wrapped at 100 columns),
+// grouped help with a wide flag pushing its help to the next line, the given intro and environment.
+{
+  const text = usageText("fetch", {
+    options: {
+      provider: { flag: "--provider", type: "string", values: ["auto", "direct"], value: "auto|direct", help: "Which provider" },
+      quiet: { flag: "--quiet", type: "flag", help: "Say less" },
+      images: { flag: "--images", off: "--no-images", type: "toggle", group: "Media", help: "Analyze images", offHelp: "Do not" },
+      long: { flag: "--a-rather-long-flag-name", type: "int", value: "N", group: "Media", help: "Wraps to the\nnext line" },
+      alias: { flags: ["--old"], type: "const", target: "quiet", value: true },
+    },
+    positional: { name: "url", type: "url", required: "缺少 URL" },
+    intro: "Fetch a page.",
+    environment: "  TAVILY_API_KEY       Optional",
+  });
+  assert.equal(
+    text,
+    [
+      "Usage: ./scripts/fetch.js [--provider auto|direct] [--quiet] [--images|--no-images]",
+      "                          [--a-rather-long-flag-name N] <url>",
+      "",
+      "Fetch a page.",
+      "",
+      "Options:",
+      "  --provider auto|direct",
+      "                       Which provider",
+      "  --quiet              Say less",
+      "",
+      "Media:",
+      "  --images             Analyze images",
+      "  --no-images          Do not",
+      "  --a-rather-long-flag-name N",
+      "                       Wraps to the",
+      "                       next line",
+      "",
+      "Environment:",
+      "  TAVILY_API_KEY       Optional",
+      "",
+    ].join("\n")
+  );
+}
 
 console.log("cli fixtures ok");

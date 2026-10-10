@@ -21,6 +21,149 @@ import { tavilySearch } from "./tavily.js";
 import { getProxyState } from "./proxy.js";
 import { buildRawSourcesPayload, compactSources, isOffDomainExtra, mergeSources, selectSources } from "./sources.js";
 
+export const DEFAULT_MAX_CHARS = 30000;
+
+/** The Search command's flags; see parseArgv in cli.js for the entry shape. */
+export const SEARCH_OPTIONS = {
+  responsesParallelToolCalls: {
+    flag: "--responses-parallel-tool-calls",
+    type: "bool",
+    value: "true|false",
+    group: "Cost",
+    config: "responsesParallelToolCalls",
+    help: "false asks Grok for one server-side tool call per turn. Cuts X search calls\nseveral-fold on relays that honor it; check diagnostics.responses_tool_calls.",
+  },
+  instructions: {
+    flag: "--instructions",
+    type: "string",
+    value: "TEXT",
+    group: "Research instructions",
+    help: "What Grok should return (fields, language, what to leave out). Only\nGrok sees it; Tavily/Firecrawl still search the plain query.",
+  },
+  // Rejected in the parser so an unknown source fails like every other argument error, before
+  // config load and output-dir cleanup.
+  searchSource: {
+    flag: "--source",
+    type: "string",
+    value: "web|x|both",
+    group: "Search sources",
+    validate: normalizeSearchSource,
+    help: "web: Grok web_search only (default). x: x_search only, for X posts,\nprofiles and threads. both: Grok decides between the two.",
+  },
+  // Aliases kept from before --source existed; both mean the "both" mode.
+  xSearchAlias: { flags: ["--responses-x-search", "--responses-include-x-search"], type: "const", target: "searchSource", value: "both" },
+  xFromDate: { flag: "--x-from-date", type: "date", value: "DATE", group: "Search sources", help: "Restrict X posts to on/after DATE (YYYY-MM-DD); implies X search" },
+  xToDate: { flag: "--x-to-date", type: "date", value: "DATE", group: "Search sources", help: "Restrict X posts to on/before DATE (YYYY-MM-DD); implies X search" },
+  // The media toggles and the handle lists have no `config` key on purpose: on the command line
+  // they imply X search (xOptionsRequested), as a configured preference they do not, so the
+  // config value is merged in resolveSearchOptions once that has been decided.
+  xImageUnderstanding: {
+    flag: "--x-images",
+    off: "--no-x-images",
+    type: "toggle",
+    group: "Search sources",
+    help: "Analyze images in X posts; billed as extra tokens",
+    offHelp: "Turn off image analysis enabled in config",
+  },
+  xVideoUnderstanding: {
+    flag: "--x-videos",
+    off: "--no-x-videos",
+    type: "toggle",
+    group: "Search sources",
+    help: "Analyze videos in X posts; billed as extra tokens",
+    offHelp: "Turn off video analysis enabled in config",
+  },
+  responsesAllowedXHandles: {
+    flag: "--responses-allowed-x-handles",
+    type: "list",
+    value: "LIST",
+    group: "Search sources",
+    help: "Comma-separated X handles to search (max 20); implies X search",
+  },
+  responsesExcludedXHandles: {
+    flag: "--responses-excluded-x-handles",
+    type: "list",
+    value: "LIST",
+    group: "Search sources",
+    help: "Comma-separated X handles to leave out (max 20); implies X search",
+  },
+  model: { flag: "--model", type: "string", value: "MODEL", group: "Grok request", config: "grokModel", help: "Model to ask; default from config (grok-4.3)" },
+  platform: { flag: "--platform", type: "string", value: "NAME", group: "Grok request", help: "Platform to focus the search on; added to the prompt" },
+  responsesMaxTurns: {
+    flag: "--responses-max-turns",
+    type: "int",
+    min: 1,
+    value: "N",
+    group: "Grok request",
+    config: "responsesMaxTurns",
+    help: "Responses max_turns (default 3); a hard cap on X search only",
+  },
+  responsesReasoningEffort: {
+    flag: "--responses-reasoning-effort",
+    type: "string",
+    value: "LEVEL",
+    group: "Grok request",
+    config: "responsesReasoningEffort",
+    help: "Reasoning effort sent for reasoning models (default low)",
+  },
+  responsesOpenRouterEngine: {
+    flag: "--responses-openrouter-engine",
+    type: "string",
+    value: "ENGINE",
+    group: "Grok request",
+    config: "responsesOpenRouterEngine",
+    help: "OpenRouter web search engine: auto (default), native, exa, firecrawl,\nparallel or perplexity",
+  },
+  responsesAllowedDomains: {
+    flag: "--responses-allowed-domains",
+    type: "list",
+    value: "LIST",
+    group: "Domain filters",
+    help: "Comma-separated domains to search (max 5). Grok, Tavily and Firecrawl all\nget them; the command line may only narrow a configured list",
+  },
+  responsesExcludedDomains: {
+    flag: "--responses-excluded-domains",
+    type: "list",
+    value: "LIST",
+    group: "Domain filters",
+    help: "Comma-separated domains to leave out (max 5)",
+  },
+  extra: { flag: "--extra", type: "int", min: 0, value: "N", group: "Extra sources", help: "Total Tavily/Firecrawl results (default 6; 0 turns them off)" },
+  noExtra: { flag: "--no-extra", type: "flag", group: "Extra sources", help: "No Tavily/Firecrawl results" },
+  sourceChars: { flag: "--source-chars", type: "int", min: 0, value: "N", group: "Output", config: "sourceChars", help: "Snippet length per source card (default 400)" },
+  maxSources: {
+    flag: "--max-sources",
+    type: "int",
+    min: 1,
+    value: "N",
+    group: "Output",
+    config: "maxSources",
+    help: "Cap on source cards in stdout (default 12); the rest are in the run record",
+  },
+  fullSources: { flag: "--full-sources", type: "flag", group: "Output", help: "Attach every source and the raw provider payloads as sources.raw" },
+  maxChars: {
+    flag: "--max-chars",
+    type: "int",
+    min: 0,
+    default: DEFAULT_MAX_CHARS,
+    value: "N",
+    group: "Output",
+    help: "Characters of the answer to print (default 30000); the rest goes to answer.full_path",
+  },
+  deadline: { flag: "--deadline", type: "int", min: 0, value: "SECONDS", group: "Output", config: "deadlineSeconds", help: "Whole-command deadline (default 240; 0 disables)" },
+};
+
+export const SEARCH_POSITIONAL = { name: "query", rest: true, required: "缺少 query" };
+
+/** Checks across fields once every flag is in. */
+export function finishSearchArgs(args) {
+  if (args.extra != null && args.noExtra) throw new Error("--extra 与 --no-extra 不能同时使用");
+  if (args.noExtra) args.extra = 0;
+  args.extraMode = args.extra === 0 ? "off" : args.extra != null ? "explicit" : "auto";
+  delete args.noExtra;
+  if (args.xFromDate && args.xToDate && args.xFromDate > args.xToDate) throw new Error("--x-from-date 不能晚于 --x-to-date");
+}
+
 const QUOTA_CODE_PATTERN = /insufficient[_-]?quota|quota[_-]?exhausted|credits?[_-]?exhausted|insufficient[_-]?credits?|payment[_-]?required/i;
 const QUOTA_MESSAGE_PATTERN = /quota|credits?|balance|billing|insufficient|额度|余额|计费/i;
 const GROK_FAILURE_LABELS = {
@@ -259,11 +402,14 @@ function resolveSearchOptions(args, config) {
 
   const source = resolveSearchSource(args, config);
 
+  // The simple options already carry their config defaults (SEARCH_OPTIONS `config`, applied by
+  // the command runner); the filters, the source and the X media toggles still need the config
+  // beside the flags, since for them a command-line value means more than a configured one.
   return {
-    model: args.model || config.grokModel,
-    maxTurns: args.responsesMaxTurns ?? config.responsesMaxTurns,
-    reasoningEffort: args.responsesReasoningEffort || config.responsesReasoningEffort,
-    parallelToolCalls: args.responsesParallelToolCalls ?? config.responsesParallelToolCalls ?? null,
+    model: args.model,
+    maxTurns: args.responsesMaxTurns,
+    reasoningEffort: args.responsesReasoningEffort,
+    parallelToolCalls: args.responsesParallelToolCalls ?? null,
     allowedDomains,
     excludedDomains,
     searchSource: source.source,
@@ -274,7 +420,7 @@ function resolveSearchOptions(args, config) {
     xToDate: args.xToDate,
     xImageUnderstanding: args.xImageUnderstanding ?? config.responsesXImageUnderstanding,
     xVideoUnderstanding: args.xVideoUnderstanding ?? config.responsesXVideoUnderstanding,
-    openRouterEngine: normalizeOpenRouterSearchEngine(args.responsesOpenRouterEngine || config.responsesOpenRouterEngine),
+    openRouterEngine: normalizeOpenRouterSearchEngine(args.responsesOpenRouterEngine),
     instructions: args.instructions || "",
   };
 }
@@ -426,15 +572,16 @@ function failureDiagnostics(config, searchOptions, extraOptions, extra, error, {
 /**
  * The Search command: Grok Responses and the extra providers in parallel, the Grok quota
  * fallback, source cards merged, picked and compacted, the answer fitted to the stdout budget,
- * and the run record. Returns the stdout object. `adapters` are the three search channels;
- * tests pass fakes, the CLI passes nothing.
+ * and the run record. Returns the stdout object. `args` are the parsed flags with their config
+ * defaults applied (applyConfigDefaults in cli.js); `adapters` are the three search channels,
+ * fakes in tests, nothing from the CLI.
  */
 export async function runSearch(args, config, adapters = {}) {
   const { grok: searchGrok = searchGrokResponses, tavily = tavilySearch, firecrawl = firecrawlSearch } = adapters;
   const startedAtMs = Date.now();
   const searchOptions = resolveSearchOptions(args, config);
-  const sourceChars = args.sourceChars ?? config.sourceChars;
-  const maxSources = args.maxSources ?? config.maxSources;
+  const sourceChars = args.sourceChars;
+  const maxSources = args.maxSources;
   const extraOptions = resolveExtra(args, config, searchOptions.searchSource);
   const grokPromise = grokChannel(args, config, searchOptions, searchGrok).then(
     (value) => ({ ok: true, value }),

@@ -11,55 +11,68 @@ export class ConfigError extends Error {
 }
 
 const DEFAULT_MODEL = "grok-4.3";
-const DEFAULT_EXTRA = 6;
 export const DEFAULT_SOURCE_CHARS = 400;
 export const DEFAULT_MAX_SOURCES = 12;
-const DEFAULT_DEADLINE_SECONDS = 240;
-const DEFAULT_TAVILY_API_URL = "https://api.tavily.com";
-const DEFAULT_FIRECRAWL_API_URL = "https://api.firecrawl.dev/v2";
 const DEFAULT_STATE_DIR = path.join(homedir(), ".cache", "grok-search");
 const DEFAULT_OUTPUT_DIR = path.join(DEFAULT_STATE_DIR, "outputs");
 const DEFAULT_OUTPUT_RETENTION_DAYS = 30;
-const DEFAULT_RESPONSES_MAX_TURNS = 3;
-const DEFAULT_RESPONSES_REASONING_EFFORT = "low";
-const DEFAULT_RESPONSES_OPENROUTER_ENGINE = "auto";
-const DEFAULT_SEARCH_SOURCE = "web";
 const API_PROVIDERS = new Set(["xai", "openrouter", "openai-compatible"]);
 const OPENROUTER_SEARCH_ENGINES = new Set(["auto", "native", "exa", "firecrawl", "parallel", "perplexity"]);
 const SEARCH_SOURCES = new Set(["web", "x", "both"]);
 export const X_HANDLE_LIMIT = 20;
+
+/**
+ * Every option the environment or the config file can set, except the Grok endpoint, key and
+ * provider, which loadConfig checks on its own. `env` is the variable; `fileKeys` are the
+ * config-file spellings (the variable's own name is always accepted too; null means the option
+ * is environment-only). The environment wins over the file, the file over `default`; a value
+ * that does not parse falls back to the default.
+ */
+const CONFIG_OPTIONS = [
+  { key: "grokModel", env: "GROK_MODEL", fileKeys: ["grokModel", "grok_model", "model"], type: "string", default: DEFAULT_MODEL },
+  { key: "responsesMaxTurns", env: "GROK_RESPONSES_MAX_TURNS", fileKeys: ["responsesMaxTurns", "responses_max_turns"], type: "int", min: 1, default: 3 },
+  // null = not sent; the relay decides. false is a cost lever where the relay passes it through.
+  { key: "responsesParallelToolCalls", env: "GROK_RESPONSES_PARALLEL_TOOL_CALLS", fileKeys: ["responsesParallelToolCalls", "responses_parallel_tool_calls"], type: "bool", default: null },
+  { key: "responsesReasoningEffort", env: "GROK_RESPONSES_REASONING_EFFORT", fileKeys: ["responsesReasoningEffort", "responses_reasoning_effort"], type: "string", default: "low" },
+  { key: "responsesAllowedDomains", env: "GROK_RESPONSES_ALLOWED_DOMAINS", fileKeys: ["responsesAllowedDomains", "responses_allowed_domains"], type: "list" },
+  { key: "responsesExcludedDomains", env: "GROK_RESPONSES_EXCLUDED_DOMAINS", fileKeys: ["responsesExcludedDomains", "responses_excluded_domains"], type: "list" },
+  { key: "responsesSearchSource", env: "GROK_SEARCH_SOURCE", fileKeys: ["searchSource", "search_source"], type: "string", default: "" },
+  { key: "responsesAllowedXHandles", env: "GROK_RESPONSES_ALLOWED_X_HANDLES", fileKeys: ["responsesAllowedXHandles", "responses_allowed_x_handles"], type: "list" },
+  { key: "responsesExcludedXHandles", env: "GROK_RESPONSES_EXCLUDED_X_HANDLES", fileKeys: ["responsesExcludedXHandles", "responses_excluded_x_handles"], type: "list" },
+  { key: "responsesXImageUnderstanding", env: "GROK_X_IMAGE_UNDERSTANDING", fileKeys: ["xImageUnderstanding", "x_image_understanding"], type: "bool", default: false },
+  { key: "responsesXVideoUnderstanding", env: "GROK_X_VIDEO_UNDERSTANDING", fileKeys: ["xVideoUnderstanding", "x_video_understanding"], type: "bool", default: false },
+  { key: "responsesOpenRouterEngine", env: "GROK_RESPONSES_OPENROUTER_ENGINE", fileKeys: ["responsesOpenRouterEngine", "responses_openrouter_engine"], type: "string", default: "auto" },
+  { key: "tavilyApiUrl", env: "TAVILY_API_URL", fileKeys: ["tavilyApiUrl", "tavily_api_url"], type: "string", default: "https://api.tavily.com" },
+  { key: "tavilyApiKey", env: "TAVILY_API_KEY", fileKeys: ["tavilyApiKey", "tavily_api_key"], type: "string" },
+  { key: "firecrawlApiUrl", env: "FIRECRAWL_API_URL", fileKeys: ["firecrawlApiUrl", "firecrawl_api_url"], type: "string", default: "https://api.firecrawl.dev/v2" },
+  { key: "firecrawlApiKey", env: "FIRECRAWL_API_KEY", fileKeys: ["firecrawlApiKey", "firecrawl_api_key"], type: "string" },
+  { key: "defaultExtra", env: "GROK_DEFAULT_EXTRA", fileKeys: ["defaultExtra", "default_extra"], type: "int", min: 0, default: 6 },
+  { key: "sourceChars", env: "GROK_SOURCE_CHARS", fileKeys: ["sourceChars", "source_chars"], type: "int", min: 0, default: DEFAULT_SOURCE_CHARS },
+  { key: "maxSources", env: "GROK_MAX_SOURCES", fileKeys: ["maxSources", "max_sources"], type: "int", min: 1, default: DEFAULT_MAX_SOURCES },
+  { key: "deadlineSeconds", env: "GROK_DEADLINE_SECONDS", fileKeys: ["deadlineSeconds", "deadline_seconds"], type: "int", min: 0, default: 240 },
+  { key: "outputDir", env: "GROK_OUTPUT_DIR", fileKeys: ["outputDir", "output_dir"], type: "path", default: DEFAULT_OUTPUT_DIR },
+  // Small cross-command state (provider cooldowns, the fetch cache). Kept outside outputDir so
+  // the retention sweep never deletes it.
+  { key: "stateDir", env: "GROK_STATE_DIR", fileKeys: ["stateDir", "state_dir"], type: "path", default: DEFAULT_STATE_DIR },
+  // One JSON record per command (query, options, answer, sources, usage, errors) so a run can be
+  // replayed without a session export. `GROK_RUN_LOG=off` disables it.
+  { key: "runLog", env: "GROK_RUN_LOG", fileKeys: ["runLog", "run_log"], type: "bool", default: true },
+  // A proxy URL for this tool alone, or off / direct to force direct connections (see proxy.js).
+  { key: "proxy", env: "GROK_PROXY", fileKeys: ["proxy"], type: "string" },
+  { key: "retryMaxAttempts", env: "GROK_RETRY_MAX_ATTEMPTS", fileKeys: null, type: "int", min: 1, default: 3 },
+  { key: "retryMultiplier", env: "GROK_RETRY_MULTIPLIER", fileKeys: null, type: "float", min: 0, default: 1 },
+  { key: "retryMaxWait", env: "GROK_RETRY_MAX_WAIT", fileKeys: null, type: "float", min: 0, default: 10 },
+  // Also keep the raw Grok Responses body inside the run record.
+  { key: "debugRaw", env: "GROK_DEBUG_RAW", fileKeys: null, type: "bool", default: false },
+  { key: "debug", env: "GROK_DEBUG", fileKeys: null, type: "bool", default: false },
+];
 
 function env(name) {
   const value = process.env[name];
   return value && value.trim() ? value.trim() : undefined;
 }
 
-function envBool(name, defaultValue = false) {
-  const value = env(name);
-  if (value == null) return defaultValue;
-  return parseBoolValue(value, defaultValue);
-}
-
-function envInt(name, defaultValue, { min = Number.MIN_SAFE_INTEGER } = {}) {
-  const value = env(name);
-  if (value == null) return defaultValue;
-  const parsed = Number.parseInt(value, 10);
-  return Number.isFinite(parsed) && parsed >= min ? parsed : defaultValue;
-}
-
-function envFloat(name, defaultValue, { min = -Infinity } = {}) {
-  const value = env(name);
-  if (value == null) return defaultValue;
-  const parsed = Number.parseFloat(value);
-  return Number.isFinite(parsed) && parsed >= min ? parsed : defaultValue;
-}
-
-function parseConfigInt(value, fallback, { min = Number.MIN_SAFE_INTEGER } = {}) {
-  const parsed = Number.parseInt(value, 10);
-  return Number.isFinite(parsed) && parsed >= min ? parsed : fallback;
-}
-
-function parseBoolValue(value, fallback = false) {
+export function parseBoolValue(value, fallback = false) {
   if (typeof value === "boolean") return value;
   if (typeof value === "number") return value !== 0;
   if (typeof value !== "string") return fallback;
@@ -74,11 +87,11 @@ function parseListValue(value) {
   return items.map((item) => String(item || "").trim()).filter(Boolean);
 }
 
-export function configFilePath() {
+function configFilePath() {
   return path.join(homedir(), ".config", "grok-search", "config.json");
 }
 
-export async function loadConfigFile() {
+async function loadConfigFile() {
   let text;
   try {
     text = await readFile(configFilePath(), "utf8");
@@ -104,32 +117,8 @@ function fileValue(fileConfig, keys) {
   return undefined;
 }
 
-function envOrFile(envName, fileConfig, keys, fallback) {
-  const envValue = env(envName);
-  if (envValue != null) return envValue;
-  const configValue = fileValue(fileConfig, keys);
-  return configValue == null ? fallback : configValue;
-}
-
-function envOrFileInt(envName, fileConfig, keys, fallback, { min = Number.MIN_SAFE_INTEGER } = {}) {
-  const envValue = env(envName);
-  if (envValue != null) return parseConfigInt(envValue, fallback, { min });
-  const configValue = fileValue(fileConfig, keys);
-  return configValue == null ? fallback : parseConfigInt(configValue, fallback, { min });
-}
-
-function envOrFileBool(envName, fileConfig, keys, fallback) {
-  const envValue = env(envName);
-  if (envValue != null) return parseBoolValue(envValue, fallback);
-  const configValue = fileValue(fileConfig, keys);
-  return configValue == null ? fallback : parseBoolValue(configValue, fallback);
-}
-
-function envOrFileList(envName, fileConfig, keys, fallback = []) {
-  const envValue = env(envName);
-  if (envValue != null) return parseListValue(envValue);
-  const configValue = fileValue(fileConfig, keys);
-  return configValue == null ? fallback : parseListValue(configValue);
+function envOrFile(envName, fileConfig, keys) {
+  return env(envName) ?? fileValue(fileConfig, [envName, ...keys]);
 }
 
 function resolveUserPath(value) {
@@ -139,6 +128,29 @@ function resolveUserPath(value) {
   return value;
 }
 
+function inRange(parsed, entry) {
+  return Number.isFinite(parsed) && parsed >= (entry.min ?? -Infinity) ? parsed : entry.default;
+}
+
+function readOption(entry, fileConfig) {
+  const raw = entry.fileKeys ? envOrFile(entry.env, fileConfig, entry.fileKeys) : env(entry.env);
+  if (raw == null) return entry.default;
+  switch (entry.type) {
+    case "int":
+      return inRange(Number.parseInt(raw, 10), entry);
+    case "float":
+      return inRange(Number.parseFloat(raw), entry);
+    case "bool":
+      return parseBoolValue(raw, entry.default);
+    case "list":
+      return parseListValue(raw);
+    case "path":
+      return resolveUserPath(raw);
+    default:
+      return raw;
+  }
+}
+
 export function inferApiProvider(grokApiUrl) {
   const normalized = String(grokApiUrl || "").toLowerCase();
   if (normalized.includes("openrouter")) return "openrouter";
@@ -146,14 +158,14 @@ export function inferApiProvider(grokApiUrl) {
   return "openai-compatible";
 }
 
-export function normalizeApiProvider(value, grokApiUrl) {
+function normalizeApiProvider(value, grokApiUrl) {
   const provider = String(value || inferApiProvider(grokApiUrl)).trim().toLowerCase();
   if (API_PROVIDERS.has(provider)) return provider;
   throw new ConfigError(`GROK_API_PROVIDER 必须是: ${[...API_PROVIDERS].join(", ")}`, "GROK_API_PROVIDER_INVALID");
 }
 
 export function normalizeSearchSource(value) {
-  const source = String(value || DEFAULT_SEARCH_SOURCE).trim().toLowerCase();
+  const source = String(value || "web").trim().toLowerCase();
   if (SEARCH_SOURCES.has(source)) return source;
   throw new ConfigError(`search source 必须是: ${[...SEARCH_SOURCES].join(", ")}`, "SEARCH_SOURCE_INVALID");
 }
@@ -167,7 +179,7 @@ export function usesWebSearch(searchSource) {
 }
 
 export function normalizeOpenRouterSearchEngine(value) {
-  const engine = String(value || DEFAULT_RESPONSES_OPENROUTER_ENGINE).trim().toLowerCase();
+  const engine = String(value || "auto").trim().toLowerCase();
   if (OPENROUTER_SEARCH_ENGINES.has(engine)) return engine;
   throw new ConfigError(
     `GROK_RESPONSES_OPENROUTER_ENGINE 必须是: ${[...OPENROUTER_SEARCH_ENGINES].join(", ")}`,
@@ -181,14 +193,14 @@ export function normalizeOpenRouterSearchEngine(value) {
 const REMOVED_OPTIONS = [
   {
     env: "GROK_RESPONSES_INCLUDE_X_SEARCH",
-    keys: ["responsesIncludeXSearch", "responses_include_x_search", "GROK_RESPONSES_INCLUDE_X_SEARCH"],
+    keys: ["responsesIncludeXSearch", "responses_include_x_search"],
     replacement: 'searchSource: "both"（或 GROK_SEARCH_SOURCE=both / --source both）',
   },
 ];
 
 function rejectRemovedOptions(fileConfig) {
   for (const option of REMOVED_OPTIONS) {
-    if (!envOrFileBool(option.env, fileConfig, option.keys, false)) continue;
+    if (!parseBoolValue(envOrFile(option.env, fileConfig, option.keys), false)) continue;
     throw new ConfigError(`${option.keys[0]} / ${option.env} 已移除，请改用 ${option.replacement}`, "CONFIG_OPTION_REMOVED");
   }
 }
@@ -196,15 +208,9 @@ function rejectRemovedOptions(fileConfig) {
 export async function loadConfig({ requireGrok = false } = {}) {
   const fileConfig = await loadConfigFile();
   rejectRemovedOptions(fileConfig);
-  const grokApiUrl = envOrFile("GROK_API_URL", fileConfig, ["GROK_API_URL", "grokApiUrl", "grok_api_url", "apiUrl", "api_url"]);
-  const grokApiKey = envOrFile("GROK_API_KEY", fileConfig, ["GROK_API_KEY", "grokApiKey", "grok_api_key", "apiKey", "api_key"]);
-  const rawApiProvider = envOrFile("GROK_API_PROVIDER", fileConfig, [
-    "GROK_API_PROVIDER",
-    "apiProvider",
-    "api_provider",
-    "grokApiProvider",
-    "grok_api_provider",
-  ]);
+  const grokApiUrl = envOrFile("GROK_API_URL", fileConfig, ["grokApiUrl", "grok_api_url", "apiUrl", "api_url"]);
+  const grokApiKey = envOrFile("GROK_API_KEY", fileConfig, ["grokApiKey", "grok_api_key", "apiKey", "api_key"]);
+  const rawApiProvider = envOrFile("GROK_API_PROVIDER", fileConfig, ["apiProvider", "api_provider", "grokApiProvider", "grok_api_provider"]);
 
   if (requireGrok && !grokApiUrl) {
     throw new ConfigError("GROK_API_URL 未配置", "GROK_API_URL_MISSING");
@@ -219,127 +225,8 @@ export async function loadConfig({ requireGrok = false } = {}) {
       ? inferApiProvider(grokApiUrl)
       : String(rawApiProvider).trim().toLowerCase();
 
-  const configuredModel = envOrFile("GROK_MODEL", fileConfig, ["GROK_MODEL", "grokModel", "grok_model", "model"], DEFAULT_MODEL);
-  const outputDir = resolveUserPath(
-    envOrFile("GROK_OUTPUT_DIR", fileConfig, ["GROK_OUTPUT_DIR", "outputDir", "output_dir"], DEFAULT_OUTPUT_DIR)
-  );
-  // Small cross-command state (provider cooldowns). Kept outside outputDir so the retention
-  // sweep never deletes it.
-  const stateDir = resolveUserPath(
-    envOrFile("GROK_STATE_DIR", fileConfig, ["GROK_STATE_DIR", "stateDir", "state_dir"], DEFAULT_STATE_DIR)
-  );
-
-  return {
-    grokApiUrl,
-    grokApiKey,
-    apiProvider,
-    grokModel: configuredModel,
-    responsesMaxTurns: envOrFileInt(
-      "GROK_RESPONSES_MAX_TURNS",
-      fileConfig,
-      ["GROK_RESPONSES_MAX_TURNS", "responsesMaxTurns", "responses_max_turns"],
-      DEFAULT_RESPONSES_MAX_TURNS,
-      { min: 1 }
-    ),
-    // null = not sent; the relay decides. false is a cost lever where the relay passes it through.
-    responsesParallelToolCalls: envOrFileBool(
-      "GROK_RESPONSES_PARALLEL_TOOL_CALLS",
-      fileConfig,
-      ["GROK_RESPONSES_PARALLEL_TOOL_CALLS", "responsesParallelToolCalls", "responses_parallel_tool_calls"],
-      null
-    ),
-    responsesReasoningEffort: envOrFile(
-      "GROK_RESPONSES_REASONING_EFFORT",
-      fileConfig,
-      ["GROK_RESPONSES_REASONING_EFFORT", "responsesReasoningEffort", "responses_reasoning_effort"],
-      DEFAULT_RESPONSES_REASONING_EFFORT
-    ),
-    responsesAllowedDomains: envOrFileList("GROK_RESPONSES_ALLOWED_DOMAINS", fileConfig, [
-      "GROK_RESPONSES_ALLOWED_DOMAINS",
-      "responsesAllowedDomains",
-      "responses_allowed_domains",
-    ]),
-    responsesExcludedDomains: envOrFileList("GROK_RESPONSES_EXCLUDED_DOMAINS", fileConfig, [
-      "GROK_RESPONSES_EXCLUDED_DOMAINS",
-      "responsesExcludedDomains",
-      "responses_excluded_domains",
-    ]),
-    responsesSearchSource: envOrFile(
-      "GROK_SEARCH_SOURCE",
-      fileConfig,
-      ["GROK_SEARCH_SOURCE", "searchSource", "search_source"],
-      ""
-    ),
-    responsesAllowedXHandles: envOrFileList("GROK_RESPONSES_ALLOWED_X_HANDLES", fileConfig, [
-      "GROK_RESPONSES_ALLOWED_X_HANDLES",
-      "responsesAllowedXHandles",
-      "responses_allowed_x_handles",
-    ]),
-    responsesExcludedXHandles: envOrFileList("GROK_RESPONSES_EXCLUDED_X_HANDLES", fileConfig, [
-      "GROK_RESPONSES_EXCLUDED_X_HANDLES",
-      "responsesExcludedXHandles",
-      "responses_excluded_x_handles",
-    ]),
-    responsesXImageUnderstanding: envOrFileBool("GROK_X_IMAGE_UNDERSTANDING", fileConfig, [
-      "GROK_X_IMAGE_UNDERSTANDING",
-      "xImageUnderstanding",
-      "x_image_understanding",
-    ], false),
-    responsesXVideoUnderstanding: envOrFileBool("GROK_X_VIDEO_UNDERSTANDING", fileConfig, [
-      "GROK_X_VIDEO_UNDERSTANDING",
-      "xVideoUnderstanding",
-      "x_video_understanding",
-    ], false),
-    responsesOpenRouterEngine: envOrFile(
-      "GROK_RESPONSES_OPENROUTER_ENGINE",
-      fileConfig,
-      ["GROK_RESPONSES_OPENROUTER_ENGINE", "responsesOpenRouterEngine", "responses_openrouter_engine"],
-      DEFAULT_RESPONSES_OPENROUTER_ENGINE
-    ),
-    tavilyApiUrl: envOrFile("TAVILY_API_URL", fileConfig, ["TAVILY_API_URL", "tavilyApiUrl", "tavily_api_url"], DEFAULT_TAVILY_API_URL),
-    tavilyApiKey: envOrFile("TAVILY_API_KEY", fileConfig, ["TAVILY_API_KEY", "tavilyApiKey", "tavily_api_key"]),
-
-    firecrawlApiUrl: envOrFile(
-      "FIRECRAWL_API_URL",
-      fileConfig,
-      ["FIRECRAWL_API_URL", "firecrawlApiUrl", "firecrawl_api_url"],
-      DEFAULT_FIRECRAWL_API_URL
-    ),
-    firecrawlApiKey: envOrFile("FIRECRAWL_API_KEY", fileConfig, ["FIRECRAWL_API_KEY", "firecrawlApiKey", "firecrawl_api_key"]),
-
-    retryMaxAttempts: envInt("GROK_RETRY_MAX_ATTEMPTS", 3, { min: 1 }),
-    retryMultiplier: envFloat("GROK_RETRY_MULTIPLIER", 1, { min: 0 }),
-    retryMaxWait: envFloat("GROK_RETRY_MAX_WAIT", 10, { min: 0 }),
-    defaultExtra: envOrFileInt("GROK_DEFAULT_EXTRA", fileConfig, ["GROK_DEFAULT_EXTRA", "defaultExtra", "default_extra"], DEFAULT_EXTRA, {
-      min: 0,
-    }),
-    sourceChars: envOrFileInt("GROK_SOURCE_CHARS", fileConfig, ["GROK_SOURCE_CHARS", "sourceChars", "source_chars"], DEFAULT_SOURCE_CHARS, {
-      min: 0,
-    }),
-    maxSources: envOrFileInt("GROK_MAX_SOURCES", fileConfig, ["GROK_MAX_SOURCES", "maxSources", "max_sources"], DEFAULT_MAX_SOURCES, {
-      min: 1,
-    }),
-    deadlineSeconds: envOrFileInt(
-      "GROK_DEADLINE_SECONDS",
-      fileConfig,
-      ["GROK_DEADLINE_SECONDS", "deadlineSeconds", "deadline_seconds"],
-      DEFAULT_DEADLINE_SECONDS,
-      { min: 0 }
-    ),
-    outputDir,
-    stateDir,
-    outputRetentionDays: DEFAULT_OUTPUT_RETENTION_DAYS,
-    // One JSON record per command (query, options, answer, sources, usage, errors) so a run
-    // can be replayed without a session export. `GROK_RUN_LOG=off` disables it.
-    runLog: envOrFileBool("GROK_RUN_LOG", fileConfig, ["GROK_RUN_LOG", "runLog", "run_log"], true),
-    // Also keep the raw Grok Responses body inside the run record.
-    debugRaw: envBool("GROK_DEBUG_RAW", false),
-    debug: envBool("GROK_DEBUG", false),
-  };
-}
-
-export function maskSecret(value) {
-  if (!value) return "未配置";
-  if (value.length <= 8) return "***";
-  return `${value.slice(0, 4)}${"*".repeat(value.length - 8)}${value.slice(-4)}`;
+  const config = { grokApiUrl, grokApiKey, apiProvider };
+  for (const entry of CONFIG_OPTIONS) config[entry.key] = readOption(entry, fileConfig);
+  config.outputRetentionDays = DEFAULT_OUTPUT_RETENTION_DAYS;
+  return config;
 }

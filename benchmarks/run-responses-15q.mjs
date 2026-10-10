@@ -4,10 +4,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadConfig, normalizeOpenRouterSearchEngine } from "../scripts/lib/config.js";
 import { searchGrokResponses } from "../scripts/lib/grok-responses.js";
-import { configureProxyFromEnv } from "../scripts/lib/proxy.js";
+import { configureProxy } from "../scripts/lib/proxy.js";
 import { benchmarkDate, questions } from "./lib/benchmark-15q-v2.mjs";
 
-configureProxyFromEnv();
+configureProxy();
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_OUTPUT = path.join(ROOT, "benchmarks", "results", `responses-15q-${benchmarkDate}.json`);

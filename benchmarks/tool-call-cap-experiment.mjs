@@ -21,9 +21,9 @@ import { fileURLToPath } from "node:url";
 import { loadConfig } from "../scripts/lib/config.js";
 import { buildResponsesBody, parseGrokResponses } from "../scripts/lib/grok-responses.js";
 import { authHeaders, requestJson } from "../scripts/lib/http.js";
-import { configureProxyFromEnv } from "../scripts/lib/proxy.js";
+import { configureProxy } from "../scripts/lib/proxy.js";
 
-configureProxyFromEnv();
+configureProxy();
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const argv = process.argv.slice(2);

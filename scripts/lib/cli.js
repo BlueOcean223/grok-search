@@ -1,13 +1,14 @@
 /**
- * What the three commands share: how argv becomes an options object, and what happens around a
- * command's own work (config, proxy, output directory, deadline, run record, error envelope, exit
- * code). A command gives its option table, usage text, the label its run-record files carry, what
+ * What the three commands share: how argv becomes an options object, the usage text, and what
+ * happens around a command's own work (config, proxy, output directory, deadline, run record,
+ * error envelope, exit code). A command is its option table, its positional, a `finish` check
+ * across fields, the hand-written parts of its usage, the label its run-record files carry, what
  * its run record looks like on an error path, and the function that does the work.
  */
 import { loadConfig } from "./config.js";
 import { startDeadline } from "./deadline.js";
 import { cleanupOutputDir, printJson, writeRunRecord, writeRunRecordSync } from "./output.js";
-import { assertProxyUsable, configureProxyFromEnv } from "./proxy.js";
+import { assertProxyUsable, configureProxy } from "./proxy.js";
 
 const TIMESTAMP_FIELD = { search: "searched_at", fetch: "fetched_at", map: "mapped_at" };
 const DEADLINE_VERB = { search: "搜索", fetch: "提取", map: "映射" };
@@ -78,9 +79,12 @@ export function httpUrl(value) {
  * argv by an option table. Each entry is keyed by the field it fills and names its `flag` (or
  * `flags`), its `type` and, as needed, `min`, `values`, `default`, `validate` (a function whose
  * return value is stored, or which throws), `off` (the switch that sets a toggle to false) and, for
- * `const`, the `target` field and `value` it sets. `positional` is the one URL (`type: "url"`) or
- * the query made of everything left (`rest: true`). `finish` validates across fields.
- * Returns `{ help: true }` when --help was given.
+ * `const`, the `target` field and `value` it sets. For the usage text an entry carries `help`
+ * (none: the flag is undocumented), `value` (the placeholder after the flag), `group` and, for a
+ * toggle, `offHelp`; `config` names the config key that fills the field when the flag was not
+ * given (applyConfigDefaults). `positional` is the one URL (`type: "url"`) or the query made of
+ * everything left (`rest: true`). `finish` validates across fields. Returns `{ help: true }` when
+ * --help was given.
  */
 export function parseArgv(argv, { options, positional = null, finish = null }) {
   const byFlag = new Map();
@@ -134,6 +138,67 @@ export function parseArgv(argv, { options, positional = null, finish = null }) {
   return out;
 }
 
+/** Fill every field whose flag was not given from the config key its entry names. */
+export function applyConfigDefaults(args, options, config) {
+  for (const [name, entry] of Object.entries(options)) {
+    if (!entry.config || entry.type === "const") continue;
+    if (args[name] === (entry.default ?? TYPE_DEFAULTS[entry.type])) args[name] = config[entry.config];
+  }
+  return args;
+}
+
+const HELP_COLUMN = 23;
+const USAGE_WIDTH = 100;
+
+function flagWithValue(entry, flags = entry.flags ?? [entry.flag]) {
+  return `${flags.join(", ")}${VALUE_TYPES.has(entry.type) ? ` ${entry.value ?? "VALUE"}` : ""}`;
+}
+
+function wrapWords(head, words, width = USAGE_WIDTH) {
+  const indent = " ".repeat(head.length + 1);
+  const lines = [head];
+  for (const word of words) {
+    const current = lines.at(-1);
+    if (current.length + 1 + word.length > width && current !== head) lines.push(`${indent}${word}`);
+    else lines[lines.length - 1] = `${current} ${word}`;
+  }
+  return lines.join("\n");
+}
+
+function formatRows(rows) {
+  const pad = " ".repeat(HELP_COLUMN);
+  return rows
+    .map(([left, help]) => {
+      const [first = "", ...more] = String(help ?? "").split("\n");
+      const head = `  ${left}`;
+      const lines = head.length >= HELP_COLUMN - 1 ? [head, `${pad}${first}`] : [`${head.padEnd(HELP_COLUMN)}${first}`];
+      return [...lines, ...more.map((line) => `${pad}${line}`)].join("\n");
+    })
+    .join("\n");
+}
+
+/**
+ * The --help text: a synopsis of every documented flag, `intro`, the flags grouped by `group` in
+ * order of first appearance (`help` and `offHelp` are the descriptions), and `environment`, the
+ * hand-written variable list.
+ */
+export function usageText(kind, { options, positional, intro = "", environment = "" }) {
+  const documented = Object.values(options).filter((entry) => entry.help != null);
+  const synopsis = documented.map((entry) =>
+    entry.off ? `[${entry.flag}|${entry.off}]` : `[${flagWithValue(entry, [(entry.flags ?? [entry.flag])[0]])}]`
+  );
+  const groups = new Map();
+  for (const entry of documented) {
+    const group = entry.group ?? "Options";
+    if (!groups.has(group)) groups.set(group, []);
+    groups.get(group).push([flagWithValue(entry), entry.help]);
+    if (entry.off) groups.get(group).push([entry.off, entry.offHelp]);
+  }
+  const sections = [...groups].map(([title, rows]) => `${title}:\n${formatRows(rows)}`);
+  const head = wrapWords(`Usage: ./scripts/${kind}.js`, [...synopsis, `<${positional.name}>`]);
+  return `${[head, intro, ...sections, environment ? `Environment:\n${environment}` : ""].filter(Boolean).join("\n\n")}\n`;
+}
+
 function errorOutput(kind, error, code, diagnostics = {}) {
   return {
     error: { message: error.message, code },
@@ -147,31 +212,33 @@ function errorOutput(kind, error, code, diagnostics = {}) {
 }
 
 /**
- * Run a command: parse argv, load config, set up the proxy, sweep the output directory, start the
- * deadline, run the work and print its result. Every exit path prints one JSON object to stdout and
- * writes a run record when a config exists: an argument error exits 2 (code ARGUMENT_ERROR, or the
- * error's own), the deadline exits 1 with DEADLINE_EXCEEDED, any other failure exits 1 with the
- * error's code or `<KIND>_ERROR` (RUNTIME_ERROR before the work started). A result carrying `error`
- * is printed as is and exits 1.
+ * Run a command: parse argv by its table, load config, set up the proxy, fill the options the
+ * flags left to config, sweep the output directory, start the deadline, run the work and print
+ * its result. Every exit path prints one JSON object to stdout and writes a run record when a
+ * config exists: an argument error exits 2 (code ARGUMENT_ERROR, or the error's own), the deadline
+ * exits 1 with DEADLINE_EXCEEDED, any other failure exits 1 with the error's code or `<KIND>_ERROR`
+ * (RUNTIME_ERROR before the work started). A result carrying `error` is printed as is and exits 1.
  */
-export async function runCommand({ kind, usage, parseArgs, run, label, errorRecord, requireGrok = false }) {
+export async function runCommand({ kind, requireGrok = false, options, positional, finish = null, intro, environment, label, errorRecord, run }) {
+  const usage = () => usageText(kind, { options, positional, intro, environment });
   let stage = "argument";
   let args = null;
   let config = null;
   try {
-    args = parseArgs(process.argv.slice(2));
+    args = parseArgv(process.argv.slice(2), { options, positional, finish });
     if (args.help) {
       console.log(usage());
       process.exit(0);
     }
     stage = "config";
-    // Every outbound request goes through global fetch, so the proxy is set up before the first one.
-    configureProxyFromEnv();
     config = await loadConfig({ requireGrok });
+    // Every outbound request goes through global fetch, so the proxy is set up before the first one.
+    configureProxy({ proxy: config.proxy, debug: config.debug });
     assertProxyUsable();
+    applyConfigDefaults(args, options, config);
     await cleanupOutputDir(config);
     stage = kind;
-    const deadlineSeconds = args.deadline ?? config.deadlineSeconds;
+    const deadlineSeconds = args.deadline;
     const stopDeadline = startDeadline(deadlineSeconds, () => {
       const error = new Error(`${DEADLINE_VERB[kind]}总耗时超过 deadline（>${deadlineSeconds}s），已中止`);
       const output = errorOutput(kind, error, "DEADLINE_EXCEEDED");

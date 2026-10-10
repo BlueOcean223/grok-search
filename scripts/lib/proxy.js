@@ -12,12 +12,6 @@ function envValue(env, name) {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-function envBool(name, defaultValue = false) {
-  const value = envValue(process.env, name);
-  if (value == null) return defaultValue;
-  return ["1", "true", "yes", "on"].includes(value.toLowerCase());
-}
-
 function maskUrl(value) {
   if (!value) return undefined;
   try {
@@ -44,8 +38,12 @@ function combineNoProxy(userNoProxy) {
   return items.join(",");
 }
 
-export function resolveProxyConfig(env = process.env) {
-  const explicit = envValue(env, "GROK_PROXY");
+/**
+ * The proxy to use: `proxy` (the configured value, GROK_PROXY by default) when set, else the
+ * ambient http(s)_proxy / all_proxy variables; `off` and the like force direct connections.
+ */
+export function resolveProxyConfig(env = process.env, { proxy = envValue(env, "GROK_PROXY") } = {}) {
+  const explicit = typeof proxy === "string" && proxy.trim() ? proxy.trim() : undefined;
   if (explicit && DISABLED_VALUES.has(explicit.toLowerCase())) {
     return { enabled: false, disabled: true, source: "GROK_PROXY" };
   }
@@ -81,15 +79,18 @@ function suppressUndiciEnvProxyWarning(fn) {
   }
 }
 
-function debug(message) {
-  if (envBool("GROK_DEBUG", false)) console.error(`[grok-search] ${message}`);
-}
-
-export function configureProxyFromEnv(env = process.env) {
+/**
+ * Route global fetch through the proxy resolveProxyConfig finds, once per process. Must run
+ * before the first outbound request; the command runner calls it right after loading config.
+ */
+export function configureProxy({ proxy, debug: debugEnabled = false } = {}, env = process.env) {
   if (configured) return state;
   configured = true;
+  const debug = (message) => {
+    if (debugEnabled) console.error(`[grok-search] ${message}`);
+  };
 
-  const config = resolveProxyConfig(env);
+  const config = resolveProxyConfig(env, { proxy });
   if (config.disabled) {
     state = { mode: "disabled", source: config.source };
     debug("proxy disabled by GROK_PROXY");

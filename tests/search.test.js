@@ -3,11 +3,12 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { applyConfigDefaults } from "../scripts/lib/cli.js";
 import { grokSearchResult } from "../scripts/lib/grok-responses.js";
-import { runSearch } from "../scripts/lib/search.js";
+import { runSearch, SEARCH_OPTIONS } from "../scripts/lib/search.js";
 
-// runSearch through its own interface: parsed args, a config, and the three search channels as
-// fakes. The Grok fake runs the real parser over a fixture body, so the result has the shape
+// runSearch through its own interface: parsed args with their config defaults applied, a config,
+// and the three search channels as fakes. The Grok fake runs the real parser over a fixture body, so the result has the shape
 // searchGrokResponses returns; only the HTTP request is left out.
 
 const outputDir = await mkdtemp(path.join(tmpdir(), "grok-search-test-output-"));
@@ -43,7 +44,7 @@ const config = {
   debug: false,
 };
 
-const baseArgs = {
+const baseArgs = applyConfigDefaults({
   query: "node release",
   platform: "",
   model: "",
@@ -68,7 +69,7 @@ const baseArgs = {
   xVideoUnderstanding: null,
   responsesOpenRouterEngine: "",
   instructions: "",
-};
+}, SEARCH_OPTIONS, config);
 
 const responsesBody = {
   model: "grok-4.3",

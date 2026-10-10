@@ -1,45 +1,33 @@
 #!/usr/bin/env node
-import { parseArgv, runCommand } from "./lib/cli.js";
+import { runCommand } from "./lib/cli.js";
 import { FETCH_CACHE_TTL_MS, readFetchCache, rememberFullPath, writeFetchCache } from "./lib/fetch-cache.js";
 import { emitText, runRecordBase, runRecordPath, STDOUT_BUDGET_BYTES, writeRunRecord } from "./lib/output.js";
 import { fetchUrl } from "./lib/providers.js";
 
 const DEFAULT_MAX_CHARS = 12000;
 
-function usage() {
-  return `Usage: ./scripts/fetch.js [--provider auto|tavily|firecrawl|direct] [--max-chars N] [--offset N] [--no-cache] [--deadline SECONDS] <url>
-
-Fetch a web page as readable text/Markdown. auto: Direct when the server sends Markdown or another
-non-HTML type (returned as served), otherwise Firecrawl Scrape, then Tavily Extract, then Direct's HTML.
-
-Options:
-  --max-chars N        Characters of text to print (default ${DEFAULT_MAX_CHARS}); the full text goes to content.full_path
-  --offset N           Start at character N, to continue a page that was cut
-  --no-cache           Fetch again even if this URL was fetched in the last ${FETCH_CACHE_TTL_MS / 60000} minutes
-
-Environment:
-  TAVILY_API_KEY       Tavily key used by the primary provider
-  TAVILY_API_URL       Default: https://api.tavily.com
-  FIRECRAWL_API_KEY    Optional Firecrawl key; keyless fallback works without it
-  FIRECRAWL_API_URL    Default: https://api.firecrawl.dev/v2
-  GROK_DEADLINE_SECONDS
-                       Optional whole-command deadline; default 240, 0 disables
-  GROK_OUTPUT_DIR      Optional directory for full content when preview is truncated
-  GROK_RETRY_*         Retry tuning shared with grok-search scripts
-`;
-}
-
 const OPTIONS = {
-  provider: { flag: "--provider", type: "string", default: "auto", values: ["auto", "tavily", "firecrawl", "direct"] },
-  maxChars: { flag: "--max-chars", type: "int", min: 0, default: DEFAULT_MAX_CHARS },
-  offset: { flag: "--offset", type: "int", min: 0, default: 0 },
-  noCache: { flag: "--no-cache", type: "flag" },
-  deadline: { flag: "--deadline", type: "int", min: 0 },
+  provider: {
+    flag: "--provider",
+    type: "string",
+    default: "auto",
+    values: ["auto", "tavily", "firecrawl", "direct"],
+    value: "auto|tavily|firecrawl|direct",
+    help: "auto (default): Direct when the server sends Markdown or another non-HTML\ntype, else Firecrawl Scrape, then Tavily Extract, then Direct's HTML",
+  },
+  maxChars: {
+    flag: "--max-chars",
+    type: "int",
+    min: 0,
+    default: DEFAULT_MAX_CHARS,
+    value: "N",
+    help: `Characters of text to print (default ${DEFAULT_MAX_CHARS}); the full text goes to content.full_path`,
+  },
+  offset: { flag: "--offset", type: "int", min: 0, default: 0, value: "N", help: "Start at character N, to continue a page that was cut" },
+  noCache: { flag: "--no-cache", type: "flag", help: `Fetch again even if this URL was fetched in the last ${FETCH_CACHE_TTL_MS / 60000} minutes` },
+  deadline: { flag: "--deadline", type: "int", min: 0, value: "SECONDS", config: "deadlineSeconds", help: "Whole-command deadline (default 240; 0 disables)" },
 };
-
-function parseArgs(argv) {
-  return parseArgv(argv, { options: OPTIONS, positional: { name: "url", type: "url", required: "缺少 URL" } });
-}
+const POSITIONAL = { name: "url", type: "url", required: "缺少 URL" };
 
 // Firecrawl bills ordinary pages at 1 credit; X posts and other JS-heavy pages cost ~30, and
 // the keyless tier only has a few dozen per day. Worth a line so the agent can budget.
@@ -215,8 +203,17 @@ async function fetchCommand(args, config) {
 
 await runCommand({
   kind: "fetch",
-  usage,
-  parseArgs,
+  options: OPTIONS,
+  positional: POSITIONAL,
+  intro: "Fetch a web page as readable text/Markdown.",
+  environment: `  TAVILY_API_KEY       Tavily key used by the primary provider
+  TAVILY_API_URL       Default: https://api.tavily.com
+  FIRECRAWL_API_KEY    Optional Firecrawl key; keyless fallback works without it
+  FIRECRAWL_API_URL    Default: https://api.firecrawl.dev/v2
+  GROK_DEADLINE_SECONDS
+                       Optional whole-command deadline; default 240, 0 disables
+  GROK_OUTPUT_DIR      Optional directory for full content when preview is truncated
+  GROK_RETRY_*         Retry tuning shared with grok-search scripts`,
   label: (args) => args.url,
   errorRecord: (config, args, output) => runRecord(config, args, output, null),
   run: fetchCommand,

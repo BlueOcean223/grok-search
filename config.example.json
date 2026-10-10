@@ -22,6 +22,7 @@
   "tavilyApiUrl": "https://api.tavily.com",
   "firecrawlApiKey": "",
   "firecrawlApiUrl": "https://api.firecrawl.dev/v2",
+  "proxy": "",
   "outputDir": "",
   "stateDir": "",
   "runLog": true

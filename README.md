@@ -179,7 +179,7 @@ Node 原生 `fetch` 默认不会可靠读取终端代理变量。本项目会在
 | `GROK_RUN_LOG` | `runLog` | 否 | 所有脚本 | 默认 `true`，每次调用写一份运行记录 JSON；`off` / `false` 关闭后 `sources.raw_path` / `diagnostics.run_path` 为 null。 |
 | `GROK_DEBUG_RAW` | — | 否 | `search.js` | 仅环境变量。设为 `1` 时把脱敏后的完整 Grok 响应作为 `grok_raw` 写进运行记录（`--full-sources` 亦然）。 |
 | `GROK_DEBUG` | — | 否 | 所有脚本 | 仅环境变量。设为 `true` 时把重试 / 清理 / 代理调试日志写到 stderr。 |
-| `GROK_PROXY` | — | 否 | 所有脚本 | 仅环境变量。显式代理 URL，或设为 `off` / `direct` 禁用代理。 |
+| `GROK_PROXY` | `proxy` | 否 | 所有脚本 | 显式代理 URL，或设为 `off` / `direct` 禁用代理。 |
 
 OpenRouter 使用 `openrouter:web_search` server tool，不会给模型名追加 `:online`。
 
