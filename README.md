@@ -154,7 +154,7 @@ Node 原生 `fetch` 默认不会可靠读取终端代理变量。本项目会在
 | `GROK_API_URL` | `apiUrl` | search 必需 | `search.js` | 支持 `/responses` 的 base URL。 |
 | `GROK_API_KEY` | `apiKey` | search 必需 | `search.js` | `GROK_API_URL` 对应的 API key。 |
 | `GROK_API_PROVIDER` | `apiProvider` | 否 | `search.js` | 选择 Responses tool 请求格式，而不是额外的搜索源；可选 `xai`、`openrouter` 或 `openai-compatible`。未配置时按 URL 推断。 |
-| `GROK_MODEL` | `model` | 否 | `search.js` | 默认 `grok-4.3`。 |
+| `GROK_MODEL` | `model` | 否 | `search.js` | 默认 `grok-4.3`。不建议用 `grok-4.6`：它约六分之一的 web 搜索会在第一个行内引用处停止输出，回答只剩开头（2026-10-10 官方与中转都复现），`grok-4.7` 没有这个问题。 |
 | `GROK_RESPONSES_MAX_TURNS` | `responsesMaxTurns` | 否 | Responses | 默认 `3`，控制 Responses agentic turn 上限；只对 X 搜索是硬上限，web 搜索不受它约束。 |
 | `GROK_RESPONSES_REASONING_EFFORT` | `responsesReasoningEffort` | 否 | Responses | 默认 `low`。 |
 | `GROK_RESPONSES_PARALLEL_TOOL_CALLS` | `responsesParallelToolCalls` | 否 | Responses | `true` / `false`；默认不发送。`false` 让 Grok 每个 turn 只做一次服务端工具调用，官方 `api.x.ai` 与透传的中转都回显 `false`，X 搜索被压到每 turn 一次、`max_turns` 成为硬上限（2026-09-08 实测：grok-4.5 经中转 7–14 次降到 3 次、费用约三分之一；grok-4.6 无论官方还是中转自然只 3–4 次，降到 3 次费用持平，`responses_tool_calls.total` 超过 6 再加）；不透传的中转会回显 `true`。`max_tool_calls` 官方与中转都不生效，未接入。命令行 `--responses-parallel-tool-calls false`。 |

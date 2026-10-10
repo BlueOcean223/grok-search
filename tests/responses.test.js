@@ -517,6 +517,71 @@ assert.equal(Object.hasOwn(urlTitled.sources[0], "title"), false);
 assert.equal(urlTitled.sources[0].x_post_id, "2097015220749074540");
 assert.equal(Object.hasOwn(urlTitled.sources[1], "title"), false);
 
+// Without an inline citation, xAI lists every page its searches returned as zero-span
+// annotations titled with their own URL (api.x.ai and two relays, 2026-10-10). That listing
+// is not a citation; the links the answer writes are, in reading order. URLs in code are
+// endpoints the answer reports, and a "web:58" label only numbers the link.
+const listing = (url) => ({ type: "url_citation", url, start_index: 0, end_index: 0, title: url });
+const linkedParsed = parseGrokResponses({
+  output: [
+    {
+      type: "message",
+      content: [
+        {
+          type: "output_text",
+          text: [
+            "Prices are on [**Pay as You Go**](https://platform.minimax.io/docs/guides/pricing-paygo) and the CN page https://platform.minimax.cn/docs/guides/pricing-paygo。",
+            "The base URL is `https://api.minimax.io/anthropic`; see ([web:58](https://example.com/notes)) and [[1]](https://example.com/cited).",
+            "```\ncurl https://api.minimax.io/v1/models\n```",
+          ].join("\n\n"),
+          annotations: [
+            { type: "url_citation", url: "https://example.com/cited", start_index: 180, end_index: 210, title: "1" },
+            listing("https://example.com/listed"),
+            listing("https://platform.minimax.io/docs/guides/pricing-paygo"),
+          ],
+        },
+      ],
+    },
+  ],
+});
+assert.deepEqual(
+  linkedParsed.sources.map((source) => [source.source_type, source.url, source.title ?? null]),
+  [
+    ["citation", "https://example.com/cited", null],
+    ["citation", "https://platform.minimax.io/docs/guides/pricing-paygo", "Pay as You Go"],
+    ["citation", "https://platform.minimax.cn/docs/guides/pricing-paygo", null],
+    ["citation", "https://example.com/notes", null],
+    ["searched", "https://example.com/listed", null],
+  ]
+);
+
+// grok-4.6 sometimes stops at its first inline citation; the answer then carries no link and
+// only the listing. No card may claim to be cited, and a message whose only annotations are
+// the listing is still narration.
+const cutParsed = parseGrokResponses({
+  output: [
+    { type: "message", content: [{ type: "output_text", text: "Searching the docs.", annotations: [listing("https://a.example/1")] }] },
+    {
+      type: "message",
+      content: [
+        {
+          type: "output_text",
+          text: "An answer that stopped at its first citation.",
+          annotations: [listing("https://a.example/1"), listing("https://a.example/2")],
+        },
+      ],
+    },
+  ],
+});
+assert.equal(cutParsed.text, "An answer that stopped at its first citation.");
+assert.deepEqual(
+  cutParsed.sources.map((source) => [source.source_type, source.url]),
+  [
+    ["searched", "https://a.example/1"],
+    ["searched", "https://a.example/2"],
+  ]
+);
+
 const missing = parseGrokResponses({});
 assert.equal(missing.text, "");
 assert.equal(missing.sources.length, 0);

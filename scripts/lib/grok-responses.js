@@ -161,6 +161,18 @@ function outputTextFromContent(content) {
 
 const NARRATION_MAX_CHARS = 300;
 
+/**
+ * When an answer carries no inline citation, xAI attaches every page its searches returned
+ * as url_citation annotations with a zero span at offset 0 and the URL as the title (seen on
+ * api.x.ai and two relays, 2026-10-10). That is a search listing, not a citation: grok-4.7
+ * seldom cites inline, so it lists 20–90 pages this way on nearly every answer.
+ */
+function isSourceListing(annotation) {
+  if (annotation?.start_index !== 0 || annotation?.end_index !== 0) return false;
+  const title = titleFromObject(annotation);
+  return !title || title === urlFromObject(annotation);
+}
+
 function extractResponsesText(data) {
   const directText = textField(data?.output_text);
   if (directText) return directText;
@@ -173,7 +185,7 @@ function extractResponsesText(data) {
     for (const content of contentItems(item)) {
       const text = outputTextFromContent(content);
       if (text) parts.push(text);
-      annotations += Array.isArray(content?.annotations) ? content.annotations.length : 0;
+      annotations += Array.isArray(content?.annotations) ? content.annotations.filter((a) => !isSourceListing(a)).length : 0;
     }
     if (parts.length) messages.push({ text: parts.join("\n\n"), annotations });
   }
@@ -397,20 +409,53 @@ function extractSearchedSources(data, defaultTool) {
   return { sources, toolCalls, openedUrls, webSearchCalls, xSearchCalls };
 }
 
-function extractCitationSources(data, defaultTool, xEnabled) {
-  const sources = [];
+/** Inline citations, plus the source listing that comes as annotations but is not one. */
+function extractAnnotationSources(data, defaultTool, xEnabled) {
+  const citations = [];
+  const listed = [];
   for (const annotation of collectAnnotations(data)) {
     const tool = citationTool(annotation, defaultTool, xEnabled);
-    const source = sourceFromValue(annotation, { sourceType: "citation", tool });
-    if (source) sources.push(source);
+    const listing = isSourceListing(annotation);
+    const source = sourceFromValue(annotation, { sourceType: listing ? "searched" : "citation", tool });
+    if (source) (listing ? listed : citations).push(source);
   }
 
   for (const citation of asArray(data?.citations)) {
     const tool = citationTool(citation, defaultTool, xEnabled);
     const source = sourceFromValue(citation, { sourceType: "citation", tool });
-    if (source) sources.push(source);
+    if (source) citations.push(source);
   }
 
+  return { citations, listed };
+}
+
+// A Markdown link, whose label may itself hold brackets (Grok renders an inline citation as
+// "[[1]](url)") and whose URL may hold one level of parentheses; or a bare URL.
+const TEXT_LINK =
+  /\[((?:[^[\]\n]|\[[^[\]\n]*\])*)\]\((https?:\/\/(?:[^\s()]|\([^\s()]*\))+)\)|(https?:\/\/[^\s<>()[\]{}"'`，。、；：！？《》（）【】「」]+)/g;
+// Labels that only number the link, like the "web:58" grok-4.7 sometimes writes.
+const NUMBERED_LABEL = /^[a-z]+:\d+$/i;
+
+/**
+ * Links the answer itself carries, in reading order. grok-4.7 seldom uses inline citations and
+ * writes Markdown links or bare URLs instead, so its citations exist only in the text. URLs in
+ * code are skipped: they are endpoints or base URLs the answer reports, not sources.
+ */
+function extractTextLinkSources(text, defaultTool, xEnabled) {
+  const prose = String(text || "")
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/`[^`\n]*`/g, " ");
+  const sources = [];
+  for (const match of prose.matchAll(TEXT_LINK)) {
+    const url = match[2] || match[3];
+    const label = (match[1] || "").replace(/[*`]/g, "").trim();
+    const title = NUMBERED_LABEL.test(label) ? "" : label;
+    const source = sourceFromValue(
+      { url, ...(title ? { title } : {}) },
+      { sourceType: "citation", tool: citationTool({ url }, defaultTool, xEnabled) }
+    );
+    if (source) sources.push(source);
+  }
   return sources;
 }
 
@@ -495,9 +540,13 @@ export function parseGrokResponses(data, { defaultTool = "web_search", xEnabled 
   if (!text) warnings.push("Responses returned no output text.");
   if (!outputItems(data).length && !textField(data?.output_text)) warnings.push("Responses output array is missing or empty.");
 
-  const citationSources = extractCitationSources(data, defaultTool, xEnabled);
+  const annotated = extractAnnotationSources(data, defaultTool, xEnabled);
+  const textLinks = extractTextLinkSources(text, defaultTool, xEnabled);
   const searched = extractSearchedSources(data, defaultTool);
-  const sources = markOpenedSources(dedupeResponsesSources(citationSources, searched.sources), searched.openedUrls);
+  const sources = markOpenedSources(
+    dedupeResponsesSources([...annotated.citations, ...textLinks], [...searched.sources, ...annotated.listed]),
+    searched.openedUrls
+  );
   const usageCounts = usageToolCounts(data);
   const counts = {
     webSearchCalls: Math.max(usageCounts?.webSearchCalls ?? 0, searched.webSearchCalls),

@@ -152,7 +152,8 @@ OpenRouter 对 xAI 模型会**自动**把 `x_search` 挂在 native web search �
 
 解析器收集：
 
-- output text annotations 与 top-level citations；
+- output text annotations 与 top-level citations；起止位置都为 0、标题为空或等于 URL 的 annotation 是检索结果清单，记为 `searched`；
+- 最终回答正文里的 Markdown 链接和裸 URL（跳过代码块和行内代码），按出现顺序记为 `citation`；
 - `web_search_call`、`x_search_call` 的 action/query/url/source；
 - usage 与费用字段。
 
@@ -223,6 +224,7 @@ Firecrawl Search（Keyless/key）┘
 工具调用次数取 `usage.server_side_tool_usage_details`（计费口径）与 `output[]` 里 `*_call` item 统计的**逐工具较大值**。两边都不可单独信任：部分中转会计费 `x_search` 却不吐 `x_search_call` item（只看 `output[]` 会报 0），另一些会把该字段填成全 0（只看 usage 同样报 0）。`responses_tool_calls` 摘要为 `{ total, upstream: { web, x } | null, trace: { web, x }, by_action: { search, open_page, find_in_page }, failed? }`：`total` 用较大值口径，`upstream` / `trace` 保留两侧原始计数，因此 `total` 可能大于 `raw_path` 里记录的 tool call 明细条数。
 - `search_budget`：`{ prompt_total: 6, prompt_x: 0|4, used_web, used_x, used_total, exceeded, enforced: false }`。prompt 里的预算是给模型的建议，不是上限：`max_turns` 限的是 agentic turn，一个 turn 可含多次检索，而且它只对 X 搜索是硬上限、web 搜索不受它约束，所以 `enforced` 恒为 false。请求侧能压次数的只有 `parallel_tool_calls: false`（`--responses-parallel-tool-calls false`，默认不发）：官方与透传的中转上每 turn 一次调用，但只在 `responses_tool_calls.total` 常超 6 时才省钱，grok-4.6 自然只跑 3–5 次、加了不省。`max_tool_calls` 官方与中转都不生效，未接入。模型本身是最大的费用杠杆（同题 grok-4.6 的调用是 grok-4.5 的 1/3–1/4）。`cost_usd` 是端点报的 `usage.cost_in_usd_ticks`，中转与官方对同一 usage 报的数可差一倍多，跨供应商不可比。实验过程与数据见 `.agent/tool-call-cap-2026-09-08.md`。
 - `responses_model`：中转实际返回的 `model`；与请求不同时写 warning。第一个中转对每次 `grok-4.5` 请求都返回 `grok-4.5-build`，这才是它 2–3 倍调用次数的来源
+- grok-4.6 的回答截断：模型写到第一个行内引用就停止输出，`status` 仍是 `completed`、没有 `incomplete_details`，回答只剩开头一两段、没有链接，随后附上起止位置为 0 的检索结果清单。2026-10-10 在官方 `api.x.ai` 和两家中转上都复现，历史 run record 里约六分之一的 web 搜索中招；同一批问题 grok-4.7 跑 15 次没有出现。解析器无法补回缺失内容，也不自动重试（grok-4.7 不用行内引用时也会给出完整但没有链接的回答，按"无链接"判断截断会误报）
 - 中转差异还包括：X 搜索以 `custom_tool_call`（`x_keyword_search` / `x_thread_fetch` …）形式返回，解析器按 `x_search` 计数并把 `by_action` 写成 `keyword_search` / `thread_fetch`；每个 turn 的过场 message（"I'll search X…"）被丢弃，`answer.text` 只取最后一条，除非前面的 message 很长或带 citation
 - `options.instructions_chars`（传了 `--instructions` 时）
 - `extra_allocation`

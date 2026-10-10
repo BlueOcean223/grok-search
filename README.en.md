@@ -161,7 +161,7 @@ Supported variables:
 | `GROK_API_URL` | `apiUrl` | Yes for search | `search.js` | Base URL that supports `/responses`. |
 | `GROK_API_KEY` | `apiKey` | Yes for search | `search.js` | API key for `GROK_API_URL`. |
 | `GROK_API_PROVIDER` | `apiProvider` | No | `search.js` | Selects the Responses tool request format, not an additional search source. Accepts `xai`, `openrouter`, or `openai-compatible`; inferred from the URL when omitted. |
-| `GROK_MODEL` | `model` | No | `search.js` | Defaults to `grok-4.3`. |
+| `GROK_MODEL` | `model` | No | `search.js` | Defaults to `grok-4.3`. Avoid `grok-4.6`: in about one web search in six it stops writing at its first inline citation and returns only the opening of the answer (reproduced on `api.x.ai` and relays, 2026-10-10); `grok-4.7` does not. |
 | `GROK_RESPONSES_MAX_TURNS` | `responsesMaxTurns` | No | Responses | Responses agentic turn limit; a hard cap for X search only, web search is not bound by it. Default: `3`. |
 | `GROK_RESPONSES_REASONING_EFFORT` | `responsesReasoningEffort` | No | Responses | Default: `low`. |
 | `GROK_RESPONSES_PARALLEL_TOOL_CALLS` | `responsesParallelToolCalls` | No | Responses | `true` / `false`; not sent unless set. `false` makes Grok run one server-side tool call per turn; `api.x.ai` and relays that pass it through echo `false` and X search drops to one call per turn, so `max_turns` becomes a hard cap (2026-09-08: grok-4.5 via a relay went from 7–14 calls to 3 at a third of the cost; grok-4.6, direct or via the same relay, runs 3–4 calls on its own and gained nothing, so add it when `responses_tool_calls.total` is above 6). Relays that ignore it echo `true`. `max_tool_calls` is ignored by xAI and by relays, so it is not wired. CLI: `--responses-parallel-tool-calls false`. |
