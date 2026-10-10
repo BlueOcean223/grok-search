@@ -1,7 +1,7 @@
 import { authHeaders, requestJson } from "./http.js";
 import { usesWebSearch, usesXSearch } from "./config.js";
 import { getLocalTimeContext, platformPrompt } from "./context.js";
-import { ANSWER_MARKER_PATTERN, searchPrompt, xSearchPrompt } from "./prompts.js";
+import { ANSWER_MARKER_PATTERN, SEARCH_BUDGET_TOTAL, SEARCH_BUDGET_X, searchPrompt, xSearchPrompt } from "./prompts.js";
 import { isCitationMarker, isXUrl, normalizeSourceUrl, parseXPostUrl } from "./sources.js";
 import { numericField, usageDiagnostics } from "./usage.js";
 
@@ -610,6 +610,112 @@ export function parseGrokResponses(data, { defaultTool = "web_search", xEnabled 
   };
 }
 
+/**
+ * `total` is the billing-grade figure (the larger of usage and trace per tool). The two raw
+ * tallies stay visible because relays under-report on either side, and the per-action split
+ * says how many of those calls were searches versus page opens.
+ */
+function summarizeToolCalls(toolCalls, total, counts) {
+  const failed = toolCalls.filter((call) => call.status && call.status !== "completed");
+  // Failed calls are listed under `failed` only, as the trace count leaves them out too.
+  const byAction = {};
+  for (const call of toolCalls) {
+    if (failed.includes(call)) continue;
+    const action = call.action_type || "other";
+    byAction[action] = (byAction[action] || 0) + 1;
+  }
+  return {
+    total,
+    upstream: counts?.upstream ?? null,
+    trace: counts?.trace ?? { web: 0, x: 0 },
+    by_action: byAction,
+    ...(failed.length ? { failed } : {}),
+  };
+}
+
+// Calls that read a page rather than search. The prompt budgets searches and expects pages to
+// be opened besides ("one focused search and one authoritative page").
+const PAGE_ACTIONS = new Set(["open_page", "find_in_page", "thread_fetch"]);
+
+/**
+ * The prompts ask for about SEARCH_BUDGET_TOTAL searches (SEARCH_BUDGET_X of them on X).
+ * That is advice, not a cap: max_turns bounds agentic turns and a turn can hold several
+ * calls, so `enforced` stays false until a provider-side limit is wired in.
+ *
+ * `used_*` are billed calls, page reads included. `used_searches` / `used_x_searches` count
+ * searches only, and `exceeded` compares those with the budget; billed calls the trace does
+ * not show count as searches, since nothing says what they were. Counting page reads had
+ * marked 47 of 199 runs (2026-09-14 to 10-10) as over budget when their searches were not.
+ */
+function searchBudget(searchSource, diagnostics, toolCalls) {
+  const usedWeb = diagnostics.responses_web_search_calls ?? 0;
+  const usedX = diagnostics.responses_x_search_calls ?? 0;
+  const promptX = usesXSearch(searchSource) ? SEARCH_BUDGET_X : 0;
+  const completed = toolCalls.filter((call) => !call.status || call.status === "completed");
+  const isX = (call) => String(call.tool || "").includes("x_search");
+  const searchesIn = (calls, billed) =>
+    calls.filter((call) => !PAGE_ACTIONS.has(call.action_type)).length + Math.max(0, billed - calls.length);
+  const xSearches = searchesIn(completed.filter(isX), usedX);
+  const searches = searchesIn(completed.filter((call) => !isX(call)), usedWeb) + xSearches;
+  return {
+    prompt_total: SEARCH_BUDGET_TOTAL,
+    prompt_x: promptX,
+    used_web: usedWeb,
+    used_x: usedX,
+    used_total: usedWeb + usedX,
+    used_searches: searches,
+    used_x_searches: xSearches,
+    exceeded: searches > SEARCH_BUDGET_TOTAL || xSearches > promptX,
+    enforced: false,
+  };
+}
+
+/**
+ * A search result from a Responses body: the answer, its sources, and diagnostics in their final
+ * shape, with the tool calls summarized and the search budget beside the counts. The raw tool
+ * calls come back as `tool_calls` for the run record. Throws GROK_RESPONSES_EMPTY, the same
+ * diagnostics attached, when the body carries no answer text.
+ */
+export function grokSearchResult(data, options, config, { requests = 1 } = {}) {
+  const defaultTool =
+    config.apiProvider === "openrouter" ? "openrouter:web_search" : options.searchSource === "x" ? "x_search" : "web_search";
+  // OpenRouter attaches x_search to native search for xAI models whatever we asked for.
+  const xEnabled = usesXSearch(options.searchSource) || config.apiProvider === "openrouter";
+  const parsed = parseGrokResponses(data, { defaultTool, xEnabled, requestedModel: options.model });
+  const {
+    responses_tool_calls: toolCalls,
+    responses_tool_call_total: total,
+    responses_tool_call_counts: counts,
+    warnings,
+    ...rest
+  } = parsed.diagnostics;
+  const diagnostics = {
+    ...rest,
+    responses_tool_calls: summarizeToolCalls(toolCalls, total, counts),
+    search_budget: searchBudget(options.searchSource, rest, toolCalls),
+  };
+  if (!parsed.text.trim()) {
+    const error = new Error("Grok Responses 返回空内容");
+    error.code = "GROK_RESPONSES_EMPTY";
+    error.diagnostics = { ...diagnostics, warnings };
+    error.requests = requests;
+    throw error;
+  }
+
+  return {
+    model: options.model,
+    content: parsed.text,
+    preamble: parsed.preamble,
+    sources: parsed.sources,
+    endpoint: "responses",
+    diagnostics,
+    warnings,
+    tool_calls: toolCalls,
+    requests,
+    raw: data,
+  };
+}
+
 export async function searchGrokResponses(query, options, config) {
   const endpoint = responsesEndpoint(config);
   const body = buildResponsesBody(query, options, config);
@@ -630,28 +736,5 @@ export async function searchGrokResponses(query, options, config) {
     error.requests = stats.requests;
     throw error;
   }
-
-  const defaultTool =
-    config.apiProvider === "openrouter" ? "openrouter:web_search" : options.searchSource === "x" ? "x_search" : "web_search";
-  // OpenRouter attaches x_search to native search for xAI models whatever we asked for.
-  const xEnabled = usesXSearch(options.searchSource) || config.apiProvider === "openrouter";
-  const parsed = parseGrokResponses(data, { defaultTool, xEnabled, requestedModel: options.model });
-  if (!parsed.text.trim()) {
-    const error = new Error("Grok Responses 返回空内容");
-    error.code = "GROK_RESPONSES_EMPTY";
-    error.diagnostics = parsed.diagnostics;
-    error.requests = stats.requests;
-    throw error;
-  }
-
-  return {
-    model: options.model,
-    content: parsed.text,
-    preamble: parsed.preamble,
-    sources: parsed.sources,
-    endpoint: "responses",
-    diagnostics: parsed.diagnostics,
-    requests: stats.requests,
-    raw: data,
-  };
+  return grokSearchResult(data, options, config, { requests: stats.requests });
 }
