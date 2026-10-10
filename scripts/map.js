@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { runCommand } from "./lib/cli.js";
 import { runRecordBase, writeRunRecord } from "./lib/output.js";
-import { DIRECT_MAP_REQUEST_TIMEOUT_SECONDS } from "./lib/direct.js";
+import { DIRECT_MAP_REQUEST_TIMEOUT_SECONDS } from "./lib/direct-map.js";
 import { mapUrl } from "./lib/providers.js";
 
 const OPTIONS = {

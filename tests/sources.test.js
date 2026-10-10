@@ -4,13 +4,12 @@ import {
   compactSource,
   hostMatchesDomain,
   isCitationMarker,
-  inMapScope,
   isOffDomainExtra,
-  mapScope,
   mergeSources,
   parseXPostUrl,
   selectSources,
 } from "../scripts/lib/sources.js";
+import { inMapScope, mapScope, scopePattern } from "../scripts/lib/map-scope.js";
 
 assert.deepEqual(parseXPostUrl("https://x.com/xai/status/1975607901571199086"), {
   x_handle: "xai",
@@ -262,5 +261,7 @@ assert.equal(mapScope("https://a.example/docs/v1.2"), "/docs/v1.2");
 assert.equal(inMapScope("https://a.example/docs/a", "a.example", "/docs"), true);
 assert.equal(inMapScope("https://a.example/docs.html", "a.example", "/docs"), false);
 assert.equal(inMapScope("https://www.a.example/docs/a", "a.example", "/docs"), false);
+assert.equal(scopePattern("/docs"), "^/docs(/.*)?$");
+assert.equal(scopePattern("/docs/v1.2"), "^/docs/v1\\.2(/.*)?$");
 
 console.log("sources fixtures ok");

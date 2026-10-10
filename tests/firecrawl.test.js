@@ -10,7 +10,7 @@ import {
   readFirecrawlCooldown,
   recordFirecrawlCooldown,
 } from "../scripts/lib/cooldown.js";
-import { collapseRepeatedLines, directFirstForX, validateXPostContent, xDirectFirstEligible } from "../scripts/lib/direct.js";
+import { collapseRepeatedLines, directFirstForX, validateXPostContent } from "../scripts/lib/direct-fetch.js";
 import { firecrawlMetadata, firecrawlScrape, firecrawlSearch } from "../scripts/lib/firecrawl.js";
 import { fetchUrl } from "../scripts/lib/providers.js";
 import { tavilySearch } from "../scripts/lib/tavily.js";
@@ -528,17 +528,15 @@ assert.deepEqual(
 );
 assert.deepEqual(firecrawlMetadata({ data: { markdown: "x" } }), {});
 
-// X posts: on the keyless tier Direct goes first, but only for URLs that name their author.
-assert.equal(xDirectFirstEligible("https://x.com/thsottiaux/status/2089143488696705077", baseConfig, "auto"), true);
-assert.equal(xDirectFirstEligible("https://x.com/i/web/status/2089143488696705077", baseConfig, "auto"), false);
-assert.equal(xDirectFirstEligible("https://x.com/thsottiaux", baseConfig, "auto"), false);
-assert.equal(xDirectFirstEligible("https://example.com/thsottiaux/status/1", baseConfig, "auto"), false);
-// Keys no longer change the answer (2026-09-08): Tavily returns the post without a date and
-// Firecrawl bills 30 credits, so Direct goes first for every X post; --provider firecrawl opts in.
-assert.equal(xDirectFirstEligible("https://x.com/thsottiaux/status/2089143488696705077", { ...baseConfig, firecrawlApiKey: "key" }, "auto"), true);
-assert.equal(xDirectFirstEligible("https://x.com/thsottiaux/status/2089143488696705077", { ...baseConfig, tavilyApiKey: "key", firecrawlApiKey: "key" }, "auto"), true);
-assert.equal(xDirectFirstEligible("https://x.com/thsottiaux/status/2089143488696705077", { ...baseConfig, firecrawlApiKey: "key" }, "firecrawl"), false);
-assert.equal(xDirectFirstEligible("https://x.com/thsottiaux/status/2089143488696705077", baseConfig, "firecrawl"), false);
+// X posts: Direct goes first under auto, but only for URLs that name their author. Keys do not
+// change the answer (2026-09-08): Tavily returns the post without a date and Firecrawl bills 30
+// credits, so Direct goes first for every X post; --provider firecrawl opts in.
+const directFirst = (url, provider) => Boolean(directFirstForX(url, provider));
+assert.equal(directFirst("https://x.com/thsottiaux/status/2089143488696705077", "auto"), true);
+assert.equal(directFirst("https://x.com/i/web/status/2089143488696705077", "auto"), false);
+assert.equal(directFirst("https://x.com/thsottiaux", "auto"), false);
+assert.equal(directFirst("https://example.com/thsottiaux/status/1", "auto"), false);
+assert.equal(directFirst("https://x.com/thsottiaux/status/2089143488696705077", "firecrawl"), false);
 
 // Validation needs the handle, a date and post text beyond X's login shell.
 const post = { x_handle: "nateberkopec", x_post_id: "2093489508897698124" };
@@ -564,7 +562,7 @@ assert.deepEqual(validateXPostContent("Posted 2026-08-17T00:13:16Z\n@nateberkope
 // handle, so fetchUrl validates against the final URL, not the one the caller typed. Seen live
 // on 2026-09-08: x.com/xai/status/2087942296721559607 -> /kunchenguid/..., page had @kunchenguid.
 {
-  const requested = directFirstForX("https://x.com/xai/status/2087942296721559607", baseConfig, "auto");
+  const requested = directFirstForX("https://x.com/xai/status/2087942296721559607", "auto");
   assert.deepEqual(requested, { x_handle: "xai", x_post_id: "2087942296721559607" });
   const canonical = parseXPostUrl("https://x.com/kunchenguid/status/2087942296721559607");
   const redirectedPage = [

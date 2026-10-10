@@ -1,10 +1,12 @@
 /**
  * Provider orchestration: which service fetches or maps a URL, in what order, and how a failure
  * of one hands over to the next. The adapters live in their own modules (`tavily.js`,
- * `firecrawl.js`, `direct.js`); every call is timed and recorded through `provider-result.js`.
+ * `firecrawl.js`, `direct-fetch.js`, `direct-map.js`); every call is timed and recorded through
+ * `provider-result.js`.
  */
 import { activeFirecrawlCooldown, clearFirecrawlCooldown, cooldownSkipMessage } from "./cooldown.js";
-import { directFetch, directFirstForX, directMap, validateXPostContent } from "./direct.js";
+import { directFetch, directFirstForX, validateXPostContent } from "./direct-fetch.js";
+import { directMap } from "./direct-map.js";
 import { firecrawlAuthMode, firecrawlScrape } from "./firecrawl.js";
 import { attemptFrom, skippedResult, timed } from "./provider-result.js";
 import { isXUrl, parseXPostUrl } from "./sources.js";
@@ -81,7 +83,7 @@ export async function fetchUrl(url, config, { provider = "auto" } = {}) {
     return done(result);
   }
 
-  const xPost = directFirstForX(url, config, provider);
+  const xPost = directFirstForX(url, provider);
   if (xPost) {
     const result = await timed(directFetch(url));
     // X redirects /<anyhandle>/status/<id> to the post's real handle, so the page names

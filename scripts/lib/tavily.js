@@ -1,5 +1,6 @@
 import { authHeaders, requestJson } from "./http.js";
-import { domainFilters, escapeRegExp, mapScope } from "./sources.js";
+import { mapScope, scopePattern } from "./map-scope.js";
+import { domainFilters } from "./sources.js";
 
 export async function tavilyExtract(url, config) {
   if (!config.tavilyApiKey) {
@@ -96,7 +97,7 @@ export async function tavilyMap(url, options, config) {
     limit: options.limit,
     timeout: options.timeout,
     allow_external: false,
-    ...(scope ? { select_paths: [`^${escapeRegExp(scope)}(/.*)?$`] } : {}),
+    ...(scope ? { select_paths: [scopePattern(scope)] } : {}),
   };
   if (options.instructions) body.instructions = options.instructions;
 
