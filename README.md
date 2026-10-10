@@ -300,18 +300,26 @@ fetch 默认只返回 12,000 字符 preview。`--max-chars 50000` 应作为看�
 `--provider auto` 的 provider 顺序：
 
 ```text
-Tavily Extract -> Firecrawl Scrape -> Direct Fetch
+Direct（请求 Markdown）-> Firecrawl Scrape -> Tavily Extract -> 第一步拿到的 Direct 文本
 ```
 
-Direct Fetch 是普通 HTTP(S) 文本页面的 best-effort fallback。它会做简单 HTML 清理、尽量格式化 JSON、记录重定向，并拒绝二进制 / 附件 / 超大响应。
+第一步 Direct 用 `Accept: text/markdown, text/html;q=0.9, */*;q=0.8` 请求页面，返回的不是 HTML 就原样采用。支持内容协商的站点会直接给出不带导航的 Markdown，例如 code.claude.com、platform.openai.com，以及接入 Cloudflare Markdown for Agents 的站点。纯文本文件、JSON 接口也在这一步拿到。2026-10-10 用记录里的 153 个 HTML URL 试过，45 个返回了 Markdown。
 
-指向纯文本文件的 URL（`raw.githubusercontent.com`、`gist.githubusercontent.com`，或路径以 `.md` / `.markdown` / `.txt` / `.rst` 结尾）在 `--provider auto` 下先走 Direct：服务器返回的是纯文本就原样采用，返回 HTML（如 `github.com/.../blob/x.md`）再走上面的顺序。2026-10-10 拿 41 个这类 URL 对照，Tavily 有 9 个拿到的文本不到 Direct 的七成，最少只有 3%（code.claude.com 的 statusline.md：1,870 / 67,266 字符）。
+返回 HTML 的页面交给 Firecrawl。它出错、目标页状态码 ≥ 400、内容为空或被限流（429）时，再交给 Tavily。两家都失败时，用第一步已经拿到的 Direct 文本，不再重复请求。
+
+Firecrawl 排在 Tavily 前面，依据是 2026-10-10 的对比：从运行记录里选了 60 个 HTML 页面，同一时间用两家各抓一遍，再人工核对。
+- Tavily 约 20 页缺正文：11 个 GitHub issue 页全部缺评论，arXiv 页缺摘要等。
+- Firecrawl 只有 1 页缺正文：一个文章列表页的列表被删了。
+- 代价：Firecrawl 每页 1 credit，Tavily basic 每 5 页 1 credit；耗时中位数 Firecrawl 3.5 秒，Tavily 1.9 秒。
+- 用量：按过去 25 天的调用量估算，每月约 146 次抓取会走到 Firecrawl。
+
+Direct Fetch 会做简单的 HTML 清理、尽量格式化 JSON、记录重定向，并拒绝二进制、附件和超大响应。
 
 Firecrawl 会把目标页的状态码一并返回：状态码 ≥ 400 的页面按失败处理，交给下一个 provider（2026-09-15 至 10-06 记录在案的 7 次全是 404 / 503 错误页）。Firecrawl 和 Direct 都会把最终 URL 写进 `final_url` / `redirected`；带路径的 URL 最终落在站点首页时写一条 warning，这种情况多半是页面已删除（例如 gov.cn 用脚本把已删除的页面跳回首页）。
 
 Firecrawl Scrape 无 key 时会使用 Keyless；配置 `FIRECRAWL_API_KEY` 后会自动发送 Bearer token。当前认证模式写入 `diagnostics.firecrawl_auth_mode`。
 
-X 原帖（`x.com/<handle>/status/<id>`）在 `--provider auto` 下不论是否配置 key 都先走 Direct，校验页面含 `@handle`、日期与非登录页正文才算成功（只有主帖）；校验不过再回到 Tavily → Firecrawl，都不可用时按原样返回 Direct 内容并写 warning。这样定的依据是 2026-09-08 的对照：Tavily 快且免费但三条里一条不带日期、另有一次超时；Firecrawl 每条约 30 credits、10 秒以上，换来 ISO 时间戳、互动数和 thread。需要 thread 时显式 `--provider firecrawl`。任何一次 `credits_used >= 10` 都会在 `diagnostics.warnings` 里说明成本。
+X 原帖（`x.com/<handle>/status/<id>`）在 `--provider auto` 下不论是否配置 key 都先走 Direct，校验页面含 `@handle`、日期与非登录页正文才算成功（只有主帖）；校验不过再依次走 Tavily、Firecrawl（X 页面让 Tavily 在前，因为 Firecrawl 抓一条约 30 credits），都不可用时按原样返回 Direct 内容并写 warning。这样定的依据是 2026-09-08 的对照：Tavily 快且免费但三条里一条不带日期、另有一次超时；Firecrawl 每条约 30 credits、10 秒以上，换来 ISO 时间戳、互动数和 thread。需要 thread 时显式 `--provider firecrawl`。任何一次 `credits_used >= 10` 都会在 `diagnostics.warnings` 里说明成本。
 
 X 会把 `/<任意handle>/status/<id>` 重定向到真实 handle，校验按重定向后的 URL 进行。
 

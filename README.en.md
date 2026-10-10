@@ -307,18 +307,26 @@ Default fetch output is a 12,000-character preview. Use `--max-chars 50000` only
 Provider order for `--provider auto`:
 
 ```text
-Tavily Extract -> Firecrawl Scrape -> Direct Fetch
+Direct (asks for Markdown) -> Firecrawl Scrape -> Tavily Extract -> the Direct text from the first step
 ```
 
-Direct Fetch is a best-effort fallback for normal HTTP(S) text pages. It strips simple HTML, formats JSON when possible, records redirects, and rejects binary/attachment/oversized responses.
+The first step requests the page with `Accept: text/markdown, text/html;q=0.9, */*;q=0.8`, and anything that is not HTML is taken as served. Sites that negotiate content send the page as Markdown without navigation, for example code.claude.com, platform.openai.com and sites on Cloudflare's Markdown for Agents. Plain-text files and JSON APIs are also fetched in this step. Tried on 153 HTML URLs from the run records on 2026-10-10, 45 answered with Markdown.
 
-A URL that names a plain-text file (`raw.githubusercontent.com`, `gist.githubusercontent.com`, or a path ending in `.md` / `.markdown` / `.txt` / `.rst`) tries Direct first under `--provider auto`: text served as text is taken verbatim, and an HTML page (such as `github.com/.../blob/x.md`) goes on to the order above. Compared on 41 such URLs on 2026-10-10, Tavily returned less than 70% of the text for 9 of them and as little as 3% (code.claude.com's statusline.md: 1,870 of 67,266 characters).
+An HTML page goes to Firecrawl. If Firecrawl errors, reports a target status of 400 or more, returns nothing or is rate-limited (429), the page goes to Tavily. If both fail, the Direct text from the first step is returned without fetching again.
+
+Firecrawl comes before Tavily because of a comparison on 2026-10-10: 60 HTML pages from the run records, fetched by both at the same time and checked by hand.
+- Tavily lost body text on about 20 of them: the comments of all 11 GitHub issue pages, arXiv abstracts and others.
+- Firecrawl lost body text on 1: the list on an article listing page.
+- Cost: Firecrawl charges 1 credit a page, Tavily basic 1 credit per 5 pages. Median time is 3.5 s for Firecrawl and 1.9 s for Tavily.
+- Volume: at the last 25 days' rate, about 146 fetches a month would reach Firecrawl.
+
+Direct Fetch strips simple HTML, formats JSON when possible, records redirects, and rejects binary, attachment and oversized responses.
 
 Firecrawl reports the target page's status with its markdown: a page with a status of 400 or more counts as a failure and goes to the next provider (all seven on record from 2026-09-15 to 10-06 were 404/503 error pages). Firecrawl and Direct both report where the fetch ended in `final_url` / `redirected`; a URL with a path that ends on the site's home page adds a warning, because the page has most likely been removed (gov.cn, for one, sends removed pages to its home page by script).
 
 Firecrawl Scrape uses Keyless without a key and automatically sends a Bearer token when `FIRECRAWL_API_KEY` is configured. The active mode is exposed as `diagnostics.firecrawl_auth_mode`.
 
-X posts (`x.com/<handle>/status/<id>`) under `--provider auto` try Direct first regardless of keys, and count as success only when the page names the handle, carries a date, and has non-boilerplate text (main post only). If validation fails the normal Tavily → Firecrawl order runs; if that is unavailable too, the Direct text is returned with a warning. The 2026-09-08 side-by-side is the reason: Tavily is fast and free but returned one of three posts without a date and timed out on another; Firecrawl costs about 30 credits and 10+ seconds per post in exchange for ISO timestamps, engagement counts and the thread. Use `--provider firecrawl` explicitly when you need the thread. Any fetch with `credits_used >= 10` adds a cost warning to `diagnostics.warnings`.
+X posts (`x.com/<handle>/status/<id>`) under `--provider auto` try Direct first regardless of keys, and count as success only when the page names the handle, carries a date, and has non-boilerplate text (main post only). If validation fails, Tavily runs and then Firecrawl (X pages keep Tavily first, since Firecrawl bills about 30 credits for one); if that is unavailable too, the Direct text is returned with a warning. The 2026-09-08 side-by-side is the reason: Tavily is fast and free but returned one of three posts without a date and timed out on another; Firecrawl costs about 30 credits and 10+ seconds per post in exchange for ISO timestamps, engagement counts and the thread. Use `--provider firecrawl` explicitly when you need the thread. Any fetch with `credits_used >= 10` adds a cost warning to `diagnostics.warnings`.
 
 X redirects `/<anyhandle>/status/<id>` to the real handle; validation uses the redirected URL.
 

@@ -93,7 +93,8 @@ await withServer(
 assert.equal((await activeFirecrawlCooldown(baseConfig, "keyless"))?.reason, "credits");
 assert.equal(await activeFirecrawlCooldown(baseConfig, "api_key"), null);
 
-// fetchUrl(auto) skips Firecrawl while cooling down and goes straight to Direct.
+// fetchUrl(auto) skips Firecrawl while cooling down and falls back to the page Direct already
+// fetched, without a second request.
 requests = 0;
 await withServer(
   (req, res) => {
@@ -166,8 +167,8 @@ await withServer(
 );
 
 // Firecrawl renders whatever the target served and reports the target's status beside it.
-// Every page on record with a status of 400 or more was an error page, so it hands over to
-// Direct, and the final error names both failures.
+// Every page on record with a status of 400 or more was an error page, so it hands over to the
+// next provider, and the final error names every failure.
 await withServer(
   (req, res) => {
     req.resume();
@@ -196,9 +197,9 @@ await withServer(
     assert.deepEqual(
       fetched.tried.map((attempt) => [attempt.provider, attempt.ok]),
       [
-        ["tavily", false],
-        ["firecrawl", false],
         ["direct", false],
+        ["firecrawl", false],
+        ["tavily", false],
       ]
     );
     assert.match(fetched.error, /firecrawl: target page returned HTTP 404/);
@@ -507,51 +508,147 @@ assert.equal(
   ["Post", "A long line of post text here", "Post", "1.", "1."].join("\n")
 );
 
-// A URL naming a plain-text file goes to Direct first: served as text it comes back verbatim,
-// where Tavily Extract returned under 70% of the text for 9 of 41 such files (2026-10-10). A
-// file-like URL that serves HTML (github.com/.../blob/x.md) goes on to the usual order, and an
-// explicit --provider is left alone.
-let tavilyExtracts = 0;
-await withServer(
-  (req, res) => {
-    req.resume();
-    if (req.url === "/tavily/extract") {
-      tavilyExtracts += 1;
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ results: [{ raw_content: "Tavily's shorter copy" }] }));
-      return;
-    }
-    if (req.url === "/docs/statusline.md") {
-      res.writeHead(200, { "content-type": "text/markdown; charset=utf-8" });
-      res.end(`# Status line\n\n${"full text ".repeat(100)}`);
-      return;
-    }
-    res.writeHead(200, { "content-type": "text/html" });
-    res.end("<title>blob</title><p>GitHub page</p>");
-  },
-  async (base) => {
-    const config = { ...baseConfig, tavilyApiKey: "tavily-key", tavilyApiUrl: `${base}/tavily`, firecrawlApiUrl: base, retryMaxAttempts: 1 };
-    const file = await fetchUrl(`${base}/docs/statusline.md`, config, { provider: "auto" });
-    assert.equal(file.provider, "direct");
-    assert.match(file.content, /full text/);
-    assert.deepEqual(file.tried, [{ provider: "direct", ok: true, skipped: false, plain_text: true }]);
-    assert.equal(tavilyExtracts, 0);
+// Direct asks for Markdown first and returns anything that is not HTML as served: a page the
+// server negotiates to Markdown, a plain-text file, JSON. An HTML page goes to Firecrawl, then
+// Tavily. A server that labels HTML as text/plain is still treated as HTML. An explicit
+// --provider is left alone.
+{
+  const seen = { scrape: 0, extract: 0, accept: "" };
+  await withServer(
+    (req, res) => {
+      req.resume();
+      if (req.url === "/scrape") {
+        seen.scrape += 1;
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ success: true, data: { markdown: "# Docs\n\nFirecrawl's copy", metadata: { statusCode: 200, creditsUsed: 1 } } }));
+        return;
+      }
+      if (req.url === "/tavily/extract") {
+        seen.extract += 1;
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ results: [{ raw_content: "Tavily's copy" }] }));
+        return;
+      }
+      if (req.url === "/docs/page") {
+        seen.accept = req.headers.accept;
+        const markdown = /^text\/markdown/.test(req.headers.accept || "");
+        res.writeHead(200, { "content-type": markdown ? "text/markdown; charset=utf-8" : "text/html" });
+        res.end(markdown ? "# Docs\n\nThe page as Markdown." : "<title>Docs</title><nav>Menu</nav><p>The page</p>");
+        return;
+      }
+      if (req.url === "/data.json") {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end('{"version":"1.2.3"}');
+        return;
+      }
+      if (req.url === "/mislabeled") {
+        res.writeHead(200, { "content-type": "text/plain" });
+        res.end("<!DOCTYPE html><html><body><p>HTML served as text</p></body></html>");
+        return;
+      }
+      res.writeHead(200, { "content-type": "text/html" });
+      res.end("<title>Article</title><p>An HTML page</p>");
+    },
+    async (base) => {
+      const config = { ...baseConfig, firecrawlApiKey: "fc-key", tavilyApiKey: "tavily-key", tavilyApiUrl: `${base}/tavily`, firecrawlApiUrl: base, retryMaxAttempts: 1 };
+      const attempts = (result) => result.tried.map((attempt) => [attempt.provider, attempt.ok]);
 
-    const blob = await fetchUrl(`${base}/o/r/blob/main/x.md`, config, { provider: "auto" });
-    assert.equal(blob.provider, "tavily");
-    assert.deepEqual(
-      blob.tried.map((attempt) => [attempt.provider, attempt.ok]),
-      [
-        ["direct", false],
-        ["tavily", true],
-      ]
-    );
-    assert.match(blob.tried[0].error, /served text\/html, not plain text/);
+      const docs = await fetchUrl(`${base}/docs/page`, config, { provider: "auto" });
+      assert.equal(docs.provider, "direct");
+      assert.equal(docs.content, "# Docs\n\nThe page as Markdown.");
+      assert.match(seen.accept, /^text\/markdown, text\/html;q=0\.9/);
+      assert.deepEqual(docs.tried, [{ provider: "direct", ok: true, skipped: false, content_type: "text/markdown; charset=utf-8" }]);
 
-    const named = await fetchUrl(`${base}/docs/statusline.md`, config, { provider: "tavily" });
-    assert.equal(named.provider, "tavily");
-  }
-);
+      const data = await fetchUrl(`${base}/data.json`, config, { provider: "auto" });
+      assert.equal(data.provider, "direct");
+      assert.match(data.content, /"version": "1\.2\.3"/);
+      assert.deepEqual([seen.scrape, seen.extract], [0, 0]);
+
+      const article = await fetchUrl(`${base}/article`, config, { provider: "auto" });
+      assert.equal(article.provider, "firecrawl");
+      assert.equal(article.content, "# Docs\n\nFirecrawl's copy");
+      assert.deepEqual(attempts(article), [
+        ["direct", true],
+        ["firecrawl", true],
+      ]);
+      assert.deepEqual(article.tried[0], { provider: "direct", ok: true, skipped: false, content_type: "text/html", used: false });
+      assert.deepEqual([seen.scrape, seen.extract], [1, 0]);
+
+      const mislabeled = await fetchUrl(`${base}/mislabeled`, config, { provider: "auto" });
+      assert.equal(mislabeled.provider, "firecrawl");
+
+      const named = await fetchUrl(`${base}/docs/page`, config, { provider: "tavily" });
+      assert.equal(named.provider, "tavily");
+      assert.deepEqual(attempts(named), [["tavily", true]]);
+    }
+  );
+}
+
+// A Firecrawl failure, a per-minute rate limit included, hands over to Tavily. X pages try
+// Tavily first, since Firecrawl bills about 30 credits for one.
+{
+  const order = [];
+  await withServer(
+    (req, res) => {
+      req.resume();
+      if (req.url === "/scrape") {
+        order.push("firecrawl");
+        res.writeHead(429, { "content-type": "application/json", "retry-after": "60" });
+        res.end(JSON.stringify({ success: false, error: "Rate limit exceeded. Consumed (req/min): 11, Remaining (req/min): 0." }));
+        return;
+      }
+      if (req.url === "/tavily/extract") {
+        order.push("tavily");
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ results: [{ raw_content: "Tavily's copy" }] }));
+        return;
+      }
+      res.writeHead(200, { "content-type": "text/html" });
+      res.end("<title>Article</title><p>An HTML page</p>");
+    },
+    async (base) => {
+      const config = { ...baseConfig, firecrawlApiKey: "fc-key", tavilyApiKey: "tavily-key", tavilyApiUrl: `${base}/tavily`, firecrawlApiUrl: base, retryMaxAttempts: 1 };
+      const limited = await fetchUrl(`${base}/article`, config, { provider: "auto" });
+      assert.equal(limited.provider, "tavily");
+      assert.deepEqual(order, ["firecrawl", "tavily"]);
+      assert.match(limited.tried[1].error, /Rate limit exceeded/);
+      assert.equal(await activeFirecrawlCooldown(config, "api_key"), null);
+    }
+  );
+  // The X URL is routed to the mock server; only the order matters here.
+  order.length = 0;
+  await withServer(
+    (req, res) => {
+      req.resume();
+      if (req.url === "/tavily/extract") {
+        order.push("tavily");
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ results: [{ raw_content: "Tavily's copy of the X page" }] }));
+        return;
+      }
+      if (req.url === "/scrape") {
+        order.push("firecrawl");
+        res.writeHead(500, { "content-type": "text/plain" });
+        res.end("not expected");
+        return;
+      }
+      res.writeHead(200, { "content-type": "text/html" });
+      res.end("<title>X</title><p>JavaScript is not available.</p>");
+    },
+    async (base) => {
+      const config = { ...baseConfig, firecrawlApiKey: "fc-key", tavilyApiKey: "tavily-key", tavilyApiUrl: `${base}/tavily`, firecrawlApiUrl: base, retryMaxAttempts: 1 };
+      const realFetch = globalThis.fetch;
+      globalThis.fetch = (url, init) => realFetch(String(url).replace("https://x.com", base), init);
+      try {
+        const page = await fetchUrl("https://x.com/i/status/2108000619122593926", config, { provider: "auto" });
+        assert.equal(page.provider, "tavily");
+        assert.deepEqual(order, ["tavily"]);
+      } finally {
+        globalThis.fetch = realFetch;
+      }
+    }
+  );
+}
 
 // When Tavily and Firecrawl fail too, the HTML Direct already fetched is returned rather than
 // fetched again, and without the X validation warning.

@@ -5,9 +5,9 @@
  * here so callers keep a single import path.
  */
 import { activeFirecrawlCooldown, clearFirecrawlCooldown, cooldownSkipMessage } from "./cooldown.js";
-import { directFetch, directFirstForX, directMap, plainTextFileUrl, validateXPostContent } from "./direct.js";
+import { directFetch, directFirstForX, directMap, validateXPostContent } from "./direct.js";
 import { firecrawlAuthMode, firecrawlScrape } from "./firecrawl.js";
-import { parseXPostUrl } from "./sources.js";
+import { isXUrl, parseXPostUrl } from "./sources.js";
 import { tavilyExtract, tavilyMap } from "./tavily.js";
 
 export { authHeaders, backoffMs, debugLog, redactSecrets, requestJson, retryAfterMs, upstreamMessage } from "./http.js";
@@ -19,7 +19,6 @@ export {
   directFetch,
   directFirstForX,
   directMap,
-  plainTextFileUrl,
   validateXPostContent,
   xDirectFirstEligible,
 } from "./direct.js";
@@ -114,72 +113,88 @@ export async function fetchUrl(url, config, { provider = "auto" } = {}) {
       skipped: false,
       error: result.ok ? `x_validation_failed: ${validation.missing.join(",")}` : result.error,
     });
-  } else if (provider === "auto" && plainTextFileUrl(url)) {
+  } else if (provider === "auto") {
+    // Direct asks for Markdown first (Accept: text/markdown). Whatever is not HTML comes back
+    // as served: Markdown from sites that negotiate it (45 of 153 HTML URLs on record did on
+    // 2026-10-10, code.claude.com and platform.openai.com among them), plain-text files, JSON.
+    // An HTML page goes to the extractors, and Direct's copy is kept as the last resort.
     const result = await directFetch(url);
     const type = result.metadata?.content_type || "";
-    if (result.ok && !/html/i.test(type)) {
-      tried.push({ provider: "direct", ok: true, skipped: false, plain_text: true });
+    if (result.ok && !servedHtml(result)) {
+      tried.push({ provider: "direct", ok: true, skipped: false, content_type: type });
       return { ...result, tried };
     }
-    // A file-like URL that serves an HTML page (github.com/.../blob/x.md, docs.rs source
-    // views) goes on to the usual order; Direct's copy stays as the last resort.
     directFirst = result;
-    tried.push({ provider: "direct", ok: false, skipped: false, error: result.ok ? `served ${type}, not plain text` : result.error });
+    tried.push(
+      result.ok
+        ? { provider: "direct", ok: true, skipped: false, content_type: type, used: false }
+        : { provider: "direct", ok: false, skipped: false, error: result.error }
+    );
   }
 
-  if (provider === "auto" || provider === "tavily") {
-    const result = await tavilyExtract(url, config);
-    tried.push({ provider: result.provider, ok: result.ok, skipped: Boolean(result.skipped), error: result.error });
-    if (result.ok || provider === "tavily") return { ...result, tried };
-  }
-
-  if (provider === "auto" || provider === "firecrawl") {
-    const authMode = firecrawlAuthMode(config);
-    // An explicit --provider firecrawl still makes the request: the user may have just added
-    // a key or topped up, and a success clears the stale cooldown.
-    const cooldown = provider === "auto" ? await activeFirecrawlCooldown(config, authMode) : null;
-    if (cooldown) {
-      tried.push({ provider: "firecrawl", ok: false, skipped: true, auth_mode: authMode, error: cooldownSkipMessage(cooldown) });
-    } else {
-      const result = await firecrawlScrape(url, config);
-      tried.push({
-        provider: result.provider,
-        ok: result.ok,
-        skipped: Boolean(result.skipped),
-        error: result.error,
-        auth_mode: result.auth_mode,
-        ...(result.requests == null ? {} : { requests: result.requests }),
-        ...(result.duration_ms == null ? {} : { duration_ms: result.duration_ms }),
-        ...(result.credits_used == null ? {} : { credits_used: result.credits_used }),
-      });
-      if (result.ok && provider === "firecrawl") await clearFirecrawlCooldown(config);
-      if (result.ok || provider === "firecrawl") return { ...result, tried };
-    }
+  // Firecrawl before Tavily: fetching 60 HTML pages from the run records both ways on
+  // 2026-10-10, Tavily lost body text on about 20 (the comments of all 11 GitHub issues, arXiv
+  // abstracts) and Firecrawl on 1 (a listing page). X pages keep Tavily first, since Firecrawl
+  // bills about 30 credits for one.
+  const order = isXUrl(url) ? ["tavily", "firecrawl"] : ["firecrawl", "tavily"];
+  for (const name of order) {
+    if (provider !== "auto" && provider !== name) continue;
+    const result = name === "firecrawl" ? await firecrawlStep(url, config, provider, tried) : await tavilyStep(url, config, tried);
+    if (result && (result.ok || provider === name)) return { ...result, tried };
   }
 
   if (provider === "auto") {
-    if (directFirst) {
-      // Direct already ran for this URL. Its page did not qualify (an X post that did not
-      // validate, a file-like URL that served HTML), but with nothing else available it is
-      // still better than an error; reuse it instead of fetching again.
-      if (directFirst.ok) {
-        const warnings = [...(directFirst.warnings || [])];
-        if (xPost) {
-          const failed = tried.find((attempt) => attempt.provider === "direct" && !attempt.ok);
-          warnings.push(
-            `The X page Direct fetched failed post validation (${failed?.error || "x_validation_failed"}) and no other provider was available, so it is returned as is; use --provider firecrawl for the full post or the thread.`
-          );
-        }
-        tried.push({ provider: "direct", ok: true, skipped: false, reused: true });
-        return { ...directFirst, warnings, tried };
+    // Direct already ran for this URL (an HTML page, or an X post that did not validate). With
+    // nothing better available, its copy beats an error; reuse it instead of fetching again.
+    if (directFirst.ok) {
+      const warnings = [...(directFirst.warnings || [])];
+      if (xPost) {
+        const failed = tried.find((attempt) => attempt.provider === "direct" && !attempt.ok);
+        warnings.push(
+          `The X page Direct fetched failed post validation (${failed?.error || "x_validation_failed"}) and no other provider was available, so it is returned as is; use --provider firecrawl for the full post or the thread.`
+        );
       }
-      return { ...directFirst, tried, error: summarizeFetchFailure(tried, directFirst.error) };
+      tried.push({ provider: "direct", ok: true, skipped: false, reused: true });
+      return { ...directFirst, warnings, tried };
     }
-    const result = await directFetch(url);
-    tried.push({ provider: result.provider, ok: result.ok, skipped: false, error: result.error });
-    if (result.ok) return { ...result, tried };
-    return { ...result, tried, error: summarizeFetchFailure(tried, result.error) };
+    return { ...directFirst, tried, error: summarizeFetchFailure(tried, directFirst.error) };
   }
 
   return { ok: false, provider, tried, error: `未知 provider: ${provider}` };
+}
+
+/** An HTML page, by its content type or, when a server mislabels it, by its first tag. */
+function servedHtml(result) {
+  return /html/i.test(result.metadata?.content_type || "") || /^\s*<(?:!doctype\s+html|html[\s>])/i.test(result.content || "");
+}
+
+async function tavilyStep(url, config, tried) {
+  const result = await tavilyExtract(url, config);
+  tried.push({ provider: result.provider, ok: result.ok, skipped: Boolean(result.skipped), error: result.error });
+  return result;
+}
+
+/** Returns null when `auto` skips Firecrawl for an active quota cooldown. */
+async function firecrawlStep(url, config, provider, tried) {
+  const authMode = firecrawlAuthMode(config);
+  // An explicit --provider firecrawl still makes the request: the user may have just added
+  // a key or topped up, and a success clears the stale cooldown.
+  const cooldown = provider === "auto" ? await activeFirecrawlCooldown(config, authMode) : null;
+  if (cooldown) {
+    tried.push({ provider: "firecrawl", ok: false, skipped: true, auth_mode: authMode, error: cooldownSkipMessage(cooldown) });
+    return null;
+  }
+  const result = await firecrawlScrape(url, config);
+  tried.push({
+    provider: result.provider,
+    ok: result.ok,
+    skipped: Boolean(result.skipped),
+    error: result.error,
+    auth_mode: result.auth_mode,
+    ...(result.requests == null ? {} : { requests: result.requests }),
+    ...(result.duration_ms == null ? {} : { duration_ms: result.duration_ms }),
+    ...(result.credits_used == null ? {} : { credits_used: result.credits_used }),
+  });
+  if (result.ok && provider === "firecrawl") await clearFirecrawlCooldown(config);
+  return result;
 }

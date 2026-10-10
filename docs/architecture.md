@@ -24,7 +24,7 @@ scripts/search.js
   └─ lib/config.js          环境变量和配置文件
 
 scripts/fetch.js
-  └─ Tavily Extract → Firecrawl Scrape → Direct Fetch
+  └─ Direct（请求 Markdown，非 HTML 直接返回）→ Firecrawl Scrape → Tavily Extract → Direct 文本
 
 scripts/map.js
   └─ Tavily Map → Direct Map

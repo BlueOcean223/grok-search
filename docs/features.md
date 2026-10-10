@@ -80,12 +80,12 @@ Grok 明确额度耗尽且 extra sources 可用时，输出仍成功，但：
 `auto` provider 顺序：
 
 ```text
-Tavily Extract → Firecrawl Scrape → Direct Fetch
+Direct（请求 Markdown）→ Firecrawl Scrape → Tavily Extract → 第一步的 Direct 文本
 ```
 
 Firecrawl 无 key 时走 Keyless；带 key 时自动发送 Bearer token。当前模式写入 `diagnostics.firecrawl_auth_mode`。
 
-指向纯文本文件的 URL（raw.githubusercontent.com、gist，或以 `.md` / `.markdown` / `.txt` / `.rst` 结尾）在 `auto` 下先走 Direct，返回纯文本就原样采用，返回 HTML 再走上面的顺序（41 个对照里 Tavily 有 9 个不到 Direct 的七成）。
+第一步 Direct 带 `Accept: text/markdown` 请求，返回的不是 HTML 就原样采用，包括内容协商得到的 Markdown、纯文本文件和 JSON（记录里 153 个 HTML URL 有 45 个返回了 Markdown）。HTML 页先给 Firecrawl，失败、限流或目标页状态码 ≥ 400 时再给 Tavily。Firecrawl 在前的依据是 60 页对比：人工核对后 Tavily 约 20 页缺正文（GitHub issue 页全部缺评论），Firecrawl 1 页。X 页面让 Tavily 在前，因为 Firecrawl 抓一条约 30 credits。
 
 Firecrawl 返回的目标页状态码 ≥ 400 时按失败处理，交给下一个 provider（记录在案的 7 次都是错误页）。`final_url` / `redirected` 来自 Firecrawl 的 `metadata.url` 或 Direct 的最终响应；带路径的 URL 落在站点首页时写 warning（gov.cn 用脚本把已删除的页面跳回首页，Firecrawl 跟过去后报 200）。
 

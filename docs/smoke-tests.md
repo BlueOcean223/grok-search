@@ -153,7 +153,7 @@ export FIRECRAWL_API_KEY="fc-your-key"
 ./scripts/fetch.js --provider direct https://example.com
 ```
 
-配置 Tavily 时顺序为 Tavily → Firecrawl → Direct；未配置 Tavily 时 Firecrawl Keyless → Direct。
+顺序为：Direct（请求 Markdown，非 HTML 直接返回）→ Firecrawl（无 key 时走 Keyless）→ Tavily（配置了 key 才有）→ 第一步的 Direct 文本。
 
 ## 输出安全
 

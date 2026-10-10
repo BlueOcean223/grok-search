@@ -1188,9 +1188,9 @@ assertCommandErrorSchema(parseJson(result.stdout), "searched_at", "ARGUMENT_ERRO
 await withServer(
   (req, res) => {
     readJson(req, (body) => {
-      if (req.url === "/tavily/extract") {
-        res.writeHead(500, { "content-type": "application/json" });
-        res.end(JSON.stringify({ error: "tavily failed" }));
+      if (req.url === "/page") {
+        res.writeHead(200, { "content-type": "text/html" });
+        res.end("<title>Page</title><p>HTML goes to the extractors</p>");
         return;
       }
       assert.equal(req.url, "/firecrawl/scrape");
@@ -1254,13 +1254,15 @@ await withServer(
     const output = parseJson(fetchResult.stdout);
     assert.equal(output.diagnostics.provider, "direct");
     assert.match(output.content.text, /Direct content/);
-    assert.deepEqual(output.diagnostics.provider_attempts.map((attempt) => attempt.provider), ["tavily", "firecrawl", "direct"]);
+    // Direct's HTML is kept from the first request and reused once Firecrawl and Tavily fail.
+    assert.deepEqual(output.diagnostics.provider_attempts.map((attempt) => attempt.provider), ["direct", "firecrawl", "tavily", "direct"]);
+    assert.equal(output.diagnostics.provider_attempts.at(-1).reused, true);
     // Fetch keeps its full text and provider trail in a run record too.
     const record = JSON.parse(await readFile(output.diagnostics.run_path, "utf8"));
     assert.equal(record.kind, "fetch");
     assert.equal(record.provider, "direct");
     assert.match(record.content, /Direct content/);
-    assert.equal(record.provider_attempts.length, 3);
+    assert.equal(record.provider_attempts.length, 4);
     assert.equal(record.error, null);
   }
 );

@@ -373,25 +373,6 @@ export function directFirstForX(url, config, provider = "auto") {
   return post?.x_handle && post?.x_post_id ? post : null;
 }
 
-const PLAIN_TEXT_HOSTS = new Set(["raw.githubusercontent.com", "gist.githubusercontent.com"]);
-const PLAIN_TEXT_PATH = /\.(?:md|markdown|txt|rst)$/i;
-
-/**
- * Whether a URL names a plain-text file, which fetchUrl(auto) then tries with Direct first.
- * Served as text, such a file comes back verbatim from a plain GET; Tavily Extract returned
- * less than 70% of the text for 9 of 41 of them and as little as 3% (code.claude.com
- * statusline.md: 1,870 of 67,266 characters). Compared against Direct on 2026-10-10, so some
- * files may have changed since Tavily read them.
- */
-export function plainTextFileUrl(url) {
-  try {
-    const parsed = new URL(url);
-    return PLAIN_TEXT_HOSTS.has(parsed.hostname) || PLAIN_TEXT_PATH.test(parsed.pathname);
-  } catch {
-    return false;
-  }
-}
-
 export function xDirectFirstEligible(url, config, provider = "auto") {
   return Boolean(directFirstForX(url, config, provider));
 }
@@ -422,7 +403,11 @@ export async function directFetch(url, options = {}) {
       redirect: "follow",
       signal: controller.signal,
       headers: {
-        Accept: "text/html,application/xhtml+xml,application/xml,application/json,text/plain,text/markdown,*/*;q=0.8",
+        // Markdown first: sites that negotiate it (code.claude.com, platform.openai.com, sites on
+        // Cloudflare's Markdown for Agents) send the page as Markdown, without navigation. 45 of
+        // 153 HTML URLs on record did (2026-10-10); none that worked with the previous header
+        // (text/html first) failed with this one.
+        Accept: "text/markdown, text/html;q=0.9, */*;q=0.8",
         "User-Agent": "grok-search-skill/0.1",
       },
     });
