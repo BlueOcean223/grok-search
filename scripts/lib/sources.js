@@ -148,6 +148,16 @@ function mergeSourceFields(existing, incoming) {
   return out;
 }
 
+/**
+ * One key per X post whatever the URL form. xAI's X search cites `/i/status/<id>`, which names
+ * no author (120 of 186 grok-4.6 X-search cards on record up to 2026-10-10), while the answer
+ * may link the same post as `/<handle>/status/<id>`; merging the two puts the handle on one card.
+ */
+function sourceKey(url) {
+  const post = isXUrl(url) ? parseXPostUrl(url) : null;
+  return post?.x_post_id ? `x-post:${post.x_post_id}` : normalizeSourceUrl(url);
+}
+
 export function mergeSources(...sourceLists) {
   const indexByKey = new Map();
   const merged = [];
@@ -156,7 +166,7 @@ export function mergeSources(...sourceLists) {
     for (const item of sources || []) {
       const url = typeof item?.url === "string" ? item.url.trim() : "";
       if (!url) continue;
-      const key = normalizeSourceUrl(url);
+      const key = sourceKey(url);
       const existingIndex = indexByKey.get(key);
       if (existingIndex == null) {
         indexByKey.set(key, merged.length);

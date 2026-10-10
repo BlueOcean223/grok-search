@@ -39,7 +39,7 @@ Responses sources 与 extra sources 去重合并后写入 `sources.items`（默�
 
 - `source_type: citation | searched`（extra provider 的结果没有该字段）。`citation` 是回答里引用的来源：行内引用，或回答正文里写出的链接 / 裸 URL（代码里的不算）。回答没有行内引用时，xAI 会把检索到的全部页面作为起止位置为 0、标题就是 URL 的 annotation 附上，这批算 `searched`
 - `opened: true`（Grok 通过 `open_page` 成功读过的页面；只有 web 路径有 trace）
-- `merged_from`（同一 URL 跨通道合并时列出补充字段的 provider）
+- `merged_from`（同一 URL 跨通道合并时列出补充字段的 provider；同一条 X 帖子的 `/i/status/<id>` 与 `/<handle>/status/<id>` 按帖子 id 合并成一张卡片，handle 补到卡片上）
 - `tool: web_search | x_search | openrouter:web_search`
 - `x_handle` / `x_post_id`（X 来源专有，从 URL 解析）
 

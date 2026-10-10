@@ -75,6 +75,21 @@ const keptTitle = mergeSources(
 assert.equal(keptTitle[0].title, "Original");
 assert.equal(keptTitle[0].snippet, "kept");
 assert.equal(Object.hasOwn(keptTitle[0], "merged_from"), false);
+// One X post under two URL forms is one card: xAI's /i/status/<id> citation names no author,
+// the answer's /<handle>/status/<id> link does, and the handle lands on the merged card.
+const xMerged = mergeSources([
+  { provider: "grok-responses", source_type: "citation", tool: "x_search", url: "https://x.com/i/status/2099958388230873165", x_post_id: "2099958388230873165" },
+  { provider: "grok-responses", source_type: "citation", url: "https://x.com/trq212/status/2099958388230873165", title: "@trq212", x_handle: "trq212", x_post_id: "2099958388230873165" },
+  { provider: "grok-responses", source_type: "citation", url: "https://x.com/trq212/status/1" },
+  { provider: "grok-responses", source_type: "citation", url: "https://x.com/trq212" },
+]);
+assert.deepEqual(xMerged.map((source) => source.url), [
+  "https://x.com/i/status/2099958388230873165",
+  "https://x.com/trq212/status/1",
+  "https://x.com/trq212",
+]);
+assert.equal(xMerged[0].x_handle, "trq212");
+assert.equal(xMerged[0].title, "@trq212");
 assert.equal(isCitationMarker("1"), true);
 assert.equal(isCitationMarker("[12]"), true);
 assert.equal(isCitationMarker("Issue #12"), false);

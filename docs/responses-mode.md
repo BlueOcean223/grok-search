@@ -184,7 +184,7 @@ X citation 只带裸 URL，且 `title` 就是 inline citation 序号（`"1"`、`
 }
 ```
 
-只有 `/<handle>/status/<id>` 这种形式带署名；`https://x.com/i/status/...`、`https://x.com/i/web/status/...` 只填 `x_post_id`，并且不保留序号标题。
+只有 `/<handle>/status/<id>` 这种形式带署名；`https://x.com/i/status/...`、`https://x.com/i/web/status/...` 只填 `x_post_id`，并且不保留序号标题。xAI 的 X search 常以 `/i/status/<id>` 引用（记录里 grok-4.6 的 186 张 X search 卡片有 120 张是这种），答案正文若用 `/<handle>/status/<id>` 链接了同一条帖子，两者按帖子 id 合并，卡片得到 handle；记录里这样补上的只有 3 张，其余的 handle 只在 `answer.text` 里。
 
 citation 本身不带产出工具信息，所以 `tool` 是推断的：**挂了 `x_search` 时**（`--source x` / `both`，以及 OpenRouter——那里 `x_search` 必然随行）X 链接标为 `x_search`；`--source web` 下不标，因为 web search 本来就会索引 x.com 页面，标成 `x_search` 等于报告一次没发生的检索。URL 还原出的 `x_handle` / `x_post_id` 与挂了哪个工具无关，始终保留。
 
