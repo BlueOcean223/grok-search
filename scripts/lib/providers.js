@@ -5,9 +5,8 @@
  * here so callers keep a single import path.
  */
 import { activeFirecrawlCooldown, clearFirecrawlCooldown, cooldownSkipMessage } from "./cooldown.js";
-import { directFetch, directFirstForX, directMap, githubIssueUrl, plainTextFileUrl, validateXPostContent } from "./direct.js";
+import { directFetch, directFirstForX, directMap, plainTextFileUrl, validateXPostContent } from "./direct.js";
 import { firecrawlAuthMode, firecrawlScrape } from "./firecrawl.js";
-import { clearlyFuller, looksThin } from "./page-text.js";
 import { parseXPostUrl } from "./sources.js";
 import { tavilyExtract, tavilyMap } from "./tavily.js";
 
@@ -20,7 +19,6 @@ export {
   directFetch,
   directFirstForX,
   directMap,
-  githubIssueUrl,
   plainTextFileUrl,
   validateXPostContent,
   xDirectFirstEligible,
@@ -116,42 +114,22 @@ export async function fetchUrl(url, config, { provider = "auto" } = {}) {
       skipped: false,
       error: result.ok ? `x_validation_failed: ${validation.missing.join(",")}` : result.error,
     });
-  } else if (provider === "auto" && (plainTextFileUrl(url) || githubIssueUrl(url))) {
-    const kind = plainTextFileUrl(url) ? "plain_text" : "github_issue";
+  } else if (provider === "auto" && plainTextFileUrl(url)) {
     const result = await directFetch(url);
     const type = result.metadata?.content_type || "";
-    // A plain-text file counts only when it is served as text: a file-like URL that serves an
-    // HTML page (github.com/.../blob/x.md, docs.rs source views) goes on to the usual order,
-    // with Direct's copy kept for comparison and as the last resort.
-    if (result.ok && (kind === "github_issue" || !/html/i.test(type))) {
-      tried.push({ provider: "direct", ok: true, skipped: false, direct_first: kind });
+    if (result.ok && !/html/i.test(type)) {
+      tried.push({ provider: "direct", ok: true, skipped: false, plain_text: true });
       return { ...result, tried };
     }
+    // A file-like URL that serves an HTML page (github.com/.../blob/x.md, docs.rs source
+    // views) goes on to the usual order; Direct's copy stays as the last resort.
     directFirst = result;
     tried.push({ provider: "direct", ok: false, skipped: false, error: result.ok ? `served ${type}, not plain text` : result.error });
   }
 
   if (provider === "auto" || provider === "tavily") {
     const result = await tavilyExtract(url, config);
-    // A thin Tavily extract is checked against Direct, which costs nothing, and Direct's copy is
-    // taken when it clearly has more of the page (page-text.js has the numbers).
-    const thin = result.ok && provider === "auto" && !xPost && looksThin(result.content);
-    tried.push({ provider: result.provider, ok: result.ok, skipped: Boolean(result.skipped), error: result.error, ...(thin ? { thin } : {}) });
-    if (thin) {
-      const direct = directFirst ?? (await directFetch(url));
-      if (direct.ok || !directFirst) {
-        const fuller = direct.ok && clearlyFuller(direct.content, result.content);
-        tried.push({
-          provider: "direct",
-          ok: fuller,
-          skipped: false,
-          compared_with: "tavily",
-          ...(directFirst ? { reused: true } : {}),
-          ...(fuller ? {} : { error: direct.ok ? "not clearly fuller than the Tavily copy" : direct.error }),
-        });
-        if (fuller) return { ...direct, tried };
-      }
-    }
+    tried.push({ provider: result.provider, ok: result.ok, skipped: Boolean(result.skipped), error: result.error });
     if (result.ok || provider === "tavily") return { ...result, tried };
   }
 

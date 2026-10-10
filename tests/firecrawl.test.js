@@ -16,13 +16,11 @@ import {
   firecrawlMetadata,
   firecrawlScrape,
   firecrawlSearch,
-  githubIssueUrl,
   tavilySearch,
   directFirstForX,
   validateXPostContent,
   xDirectFirstEligible,
 } from "../scripts/lib/providers.js";
-import { addedProseChars, clearlyFuller, looksThin } from "../scripts/lib/page-text.js";
 import { parseXPostUrl } from "../scripts/lib/sources.js";
 
 const stateDir = await mkdtemp(path.join(tmpdir(), "grok-search-state-"));
@@ -536,10 +534,9 @@ await withServer(
     const file = await fetchUrl(`${base}/docs/statusline.md`, config, { provider: "auto" });
     assert.equal(file.provider, "direct");
     assert.match(file.content, /full text/);
-    assert.deepEqual(file.tried, [{ provider: "direct", ok: true, skipped: false, direct_first: "plain_text" }]);
+    assert.deepEqual(file.tried, [{ provider: "direct", ok: true, skipped: false, plain_text: true }]);
     assert.equal(tavilyExtracts, 0);
 
-    // Tavily's copy here is thin, so it is also compared with the HTML Direct already has.
     const blob = await fetchUrl(`${base}/o/r/blob/main/x.md`, config, { provider: "auto" });
     assert.equal(blob.provider, "tavily");
     assert.deepEqual(
@@ -547,168 +544,14 @@ await withServer(
       [
         ["direct", false],
         ["tavily", true],
-        ["direct", false],
       ]
     );
     assert.match(blob.tried[0].error, /served text\/html, not plain text/);
-    assert.equal(blob.tried[2].reused, true);
 
     const named = await fetchUrl(`${base}/docs/statusline.md`, config, { provider: "tavily" });
     assert.equal(named.provider, "tavily");
   }
 );
-
-// GitHub issue pages go to Direct first too, and its HTML is taken: Tavily lost body sections
-// or comments on all 8 issue pages it served (2026-10-10). Pull requests and other GitHub
-// pages are not included.
-assert.equal(githubIssueUrl("https://github.com/openclaw/openclaw/issues/91956"), true);
-assert.equal(githubIssueUrl("https://github.com/o/r/issues/12#issuecomment-3"), true);
-assert.equal(githubIssueUrl("https://github.com/o/r/issues/12?q=1"), true);
-assert.equal(githubIssueUrl("https://github.com/o/r/issues"), false);
-assert.equal(githubIssueUrl("https://github.com/o/r/issues/new"), false);
-assert.equal(githubIssueUrl("https://github.com/o/r/pull/12"), false);
-assert.equal(githubIssueUrl("https://github.com/o/r/issues/12x"), false);
-{
-  let tavilyCalls = 0;
-  await withServer(
-    (req, res) => {
-      req.resume();
-      if (req.url === "/tavily/extract") {
-        tavilyCalls += 1;
-        res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify({ results: [{ raw_content: "Tavily copy" }] }));
-        return;
-      }
-      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-      res.end("<title>Issue 91956</title><p>The issue body and every comment.</p>");
-    },
-    async (base) => {
-      // directFetch uses the global fetch; send github.com to the local server.
-      const realFetch = globalThis.fetch;
-      globalThis.fetch = (url, init) => realFetch(String(url).replace("https://github.com", base), init);
-      try {
-        const config = { ...baseConfig, tavilyApiKey: "tavily-key", tavilyApiUrl: `${base}/tavily`, retryMaxAttempts: 1 };
-        const issue = await fetchUrl("https://github.com/openclaw/openclaw/issues/91956", config, { provider: "auto" });
-        assert.equal(issue.provider, "direct");
-        assert.match(issue.content, /every comment/);
-        assert.deepEqual(issue.tried, [{ provider: "direct", ok: true, skipped: false, direct_first: "github_issue" }]);
-        assert.equal(tavilyCalls, 0);
-      } finally {
-        globalThis.fetch = realFetch;
-      }
-    }
-  );
-}
-
-// Long lines are matched across Markdown formatting: the same sentence with a link, bold or a
-// list marker is not counted as new text.
-assert.equal(addedProseChars("- **Install** with [npm](https://npmjs.com) and run the setup command once.", "Install with npm and run the setup command once."), 0);
-// Past 1,500 characters an extract is thin when half or more of at least five headings are empty.
-{
-  const section = (n) => `## Section ${n}\n\nSection ${n} body: ${"text long enough to count as a sentence. ".repeat(12)}`;
-  const headings = (empty) => [1, 2, 3, 4, 5, 6].map((n) => (n <= empty ? `## Empty ${n}` : section(n))).join("\n\n");
-  assert.equal(looksThin(headings(3)), true);
-  assert.equal(looksThin(headings(2)), false);
-  assert.equal(clearlyFuller(headings(0), headings(3)), true);
-  assert.equal(clearlyFuller(headings(0), headings(2)), false);
-}
-
-// A thin Tavily extract (under 1,500 characters, or mostly empty headings) is compared with
-// Direct, and Direct's copy is taken only when it has clearly more text. Tuned on 19 thin
-// extracts: Direct for all 8 that had lost text, Tavily kept for the 9 that had not.
-{
-  const sentence = (n) => `Sentence ${n} of the article body, long enough to count as real text.`;
-  const skeleton = ["# Title", "## Install", "## Usage", "## Options", "## FAQ", "## License"].join("\n\n");
-  const pages = {
-    // Tavily kept the headings only; the page has the body under them.
-    "/lost": {
-      tavily: skeleton,
-      html: `<h1>Title</h1>${Array.from({ length: 30 }, (_, n) => `<p>${sentence(n)}</p>`).join("")}`,
-    },
-    // Tavily has the body; Direct adds only navigation and a footer.
-    "/short": {
-      tavily: Array.from({ length: 12 }, (_, n) => sentence(n)).join("\n\n"),
-      html: `<nav><a href="/">Home</a> <a href="/docs">Docs</a></nav>${Array.from({ length: 12 }, (_, n) => `<p>${sentence(n)}</p>`).join("")}<footer>Copyright 2026 Example Corporation, all rights reserved.</footer>`,
-    },
-    // Not thin: never compared.
-    "/full": {
-      tavily: Array.from({ length: 30 }, (_, n) => sentence(n)).join("\n\n"),
-      html: "<p>unused</p>",
-    },
-  };
-  const pageGets = {};
-  await withServer(
-    (req, res) => {
-      if (req.url === "/tavily/extract") {
-        readBody(req, (body) => {
-          const page = pages[new URL(body.urls[0]).pathname];
-          res.writeHead(200, { "content-type": "application/json" });
-          res.end(JSON.stringify({ results: [{ raw_content: page.tavily }] }));
-        });
-        return;
-      }
-      req.resume();
-      pageGets[req.url] = (pageGets[req.url] || 0) + 1;
-      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-      res.end(pages[req.url].html);
-    },
-    async (base) => {
-      const config = { ...baseConfig, tavilyApiKey: "tavily-key", tavilyApiUrl: `${base}/tavily`, firecrawlApiUrl: base, retryMaxAttempts: 1 };
-      const attempts = (result) => result.tried.map((attempt) => [attempt.provider, attempt.ok]);
-
-      const lost = await fetchUrl(`${base}/lost`, config, { provider: "auto" });
-      assert.equal(lost.provider, "direct");
-      assert.match(lost.content, /Sentence 29/);
-      assert.deepEqual(attempts(lost), [
-        ["tavily", true],
-        ["direct", true],
-      ]);
-      assert.equal(lost.tried[0].thin, true);
-      assert.equal(lost.tried[1].compared_with, "tavily");
-
-      const short = await fetchUrl(`${base}/short`, config, { provider: "auto" });
-      assert.equal(short.provider, "tavily");
-      assert.deepEqual(attempts(short), [
-        ["tavily", true],
-        ["direct", false],
-      ]);
-      assert.match(short.tried[1].error, /not clearly fuller/);
-
-      const full = await fetchUrl(`${base}/full`, config, { provider: "auto" });
-      assert.equal(full.provider, "tavily");
-      assert.deepEqual(attempts(full), [["tavily", true]]);
-      assert.equal(pageGets["/full"], undefined);
-
-      // An explicit --provider tavily is left alone.
-      const named = await fetchUrl(`${base}/lost`, config, { provider: "tavily" });
-      assert.equal(named.provider, "tavily");
-      assert.equal(named.tried.length, 1);
-      assert.equal(pageGets["/lost"], 1);
-    }
-  );
-  // Direct failing the comparison keeps Tavily's copy.
-  await withServer(
-    (req, res) => {
-      if (req.url === "/tavily/extract") {
-        req.resume();
-        res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify({ results: [{ raw_content: skeleton }] }));
-        return;
-      }
-      req.resume();
-      res.writeHead(503, { "content-type": "text/plain" });
-      res.end("unavailable");
-    },
-    async (base) => {
-      const config = { ...baseConfig, tavilyApiKey: "tavily-key", tavilyApiUrl: `${base}/tavily`, retryMaxAttempts: 1 };
-      const gone = await fetchUrl(`${base}/gone`, config, { provider: "auto" });
-      assert.equal(gone.provider, "tavily");
-      assert.equal(gone.content, skeleton);
-      assert.equal(gone.tried[1].ok, false);
-      assert.match(gone.tried[1].error, /503/);
-    }
-  );
-}
 
 // When Tavily and Firecrawl fail too, the HTML Direct already fetched is returned rather than
 // fetched again, and without the X validation warning.

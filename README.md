@@ -307,10 +307,6 @@ Direct Fetch 是普通 HTTP(S) 文本页面的 best-effort fallback。它会做�
 
 指向纯文本文件的 URL（`raw.githubusercontent.com`、`gist.githubusercontent.com`，或路径以 `.md` / `.markdown` / `.txt` / `.rst` 结尾）在 `--provider auto` 下先走 Direct：服务器返回的是纯文本就原样采用，返回 HTML（如 `github.com/.../blob/x.md`）再走上面的顺序。2026-10-10 拿 41 个这类 URL 对照，Tavily 有 9 个拿到的文本不到 Direct 的七成，最少只有 3%（code.claude.com 的 statusline.md：1,870 / 67,266 字符）。
 
-GitHub issue 页（`github.com/<owner>/<repo>/issues/<n>`）在 `--provider auto` 下也先走 Direct，返回的 HTML 直接采用：GitHub 把 issue 正文和评论都渲染在 HTML 里，而 Tavily 返回的 8 个 issue 页全都缺了正文段落或评论（扣掉导航后 Direct 多 494–7,826 字符）。PR 页两边各有缺漏，不在此列。
-
-其他页面 Tavily 返回的正文过短（不到 1,500 字符），或者至少 5 个标题里有一半以上下面是空的，会再用 Direct 抓一次比较（Direct 不花钱，不调 Firecrawl）：Direct 多出的长句（Markdown 链接还原成文字后 ≥ 40 字符的行）不少于 1,000 字符、也不少于 Tavily 自身的长句总量时，改用 Direct 的结果。`provider_attempts` 里 Tavily 那条带 `thin: true`，比较那条带 `compared_with: "tavily"`。这条规则是拿 106 个页面里被判为过短的 19 个调出来的：真缺内容的 8 个全部换成 Direct，没缺的 9 个都保留 Tavily；对没被判为过短的 87 个页面每次都比较的话只会多换 3 个，所以不做。
-
 Firecrawl 会把目标页的状态码一并返回：状态码 ≥ 400 的页面按失败处理，交给下一个 provider（2026-09-15 至 10-06 记录在案的 7 次全是 404 / 503 错误页）。Firecrawl 和 Direct 都会把最终 URL 写进 `final_url` / `redirected`；带路径的 URL 最终落在站点首页时写一条 warning，这种情况多半是页面已删除（例如 gov.cn 用脚本把已删除的页面跳回首页）。
 
 Firecrawl Scrape 无 key 时会使用 Keyless；配置 `FIRECRAWL_API_KEY` 后会自动发送 Bearer token。当前认证模式写入 `diagnostics.firecrawl_auth_mode`。
