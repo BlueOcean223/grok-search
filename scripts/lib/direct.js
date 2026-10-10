@@ -392,6 +392,16 @@ export function plainTextFileUrl(url) {
   }
 }
 
+/**
+ * GitHub issue pages, which fetchUrl(auto) also tries with Direct first. GitHub renders the
+ * issue and its comments into the HTML; Tavily dropped body sections or comments on all 8
+ * issue pages it served (Direct had 494-7,826 more characters of text each, navigation left
+ * out; compared 2026-10-10). Pull requests are not included: there the two were mixed.
+ */
+export function githubIssueUrl(url) {
+  return /^https:\/\/github\.com\/[^/]+\/[^/]+\/issues\/\d+(?:[/?#]|$)/.test(String(url || ""));
+}
+
 export function xDirectFirstEligible(url, config, provider = "auto") {
   return Boolean(directFirstForX(url, config, provider));
 }
