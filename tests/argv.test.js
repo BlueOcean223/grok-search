@@ -1513,6 +1513,61 @@ await withServer(
   }
 );
 
+// Direct Map follows a redirect to another host (example.com to www.example.com; here localhost
+// to 127.0.0.1) and maps where the page landed, as the old home-page fallback did. A URL that
+// names a file maps its directory.
+await withServer(
+  (req, res) => {
+    req.resume();
+    const port = req.headers.host.split(":")[1];
+    if (req.headers.host.startsWith("localhost")) {
+      res.writeHead(301, { location: `http://127.0.0.1:${port}${req.url}` });
+      res.end();
+      return;
+    }
+    if (req.url === "/" || req.url === "/docs/index.html") {
+      res.writeHead(200, { "content-type": "text/html" });
+      res.end("<a href='/docs/a'>A</a><a href='/docs/b'>B</a><a href='/pricing'>P</a>");
+      return;
+    }
+    res.writeHead(404, { "content-type": "text/plain" });
+    res.end("not found");
+  },
+  async (_server, port) => {
+    const site = `http://127.0.0.1:${port}`;
+    const moved = parseJson((await runNode(["scripts/map.js", "--provider", "direct", `http://localhost:${port}/`])).stdout);
+    assert.deepEqual(moved.urls, [`${site}/docs/a`, `${site}/docs/b`, `${site}/pricing`]);
+    assert.equal(moved.base_url, site);
+    assert.match(moved.diagnostics.warnings.join("\n"), new RegExp(`redirected to ${site}/; mapped ${site}/ instead`));
+
+    const file = parseJson((await runNode(["scripts/map.js", "--provider", "direct", `${site}/docs/index.html`])).stdout);
+    assert.deepEqual(file.urls, [`${site}/docs/a`, `${site}/docs/b`]);
+    assert.match(file.diagnostics.warnings.join("\n"), /kept URLs under \/docs;/);
+  }
+);
+
+// --direct-timeout is the per-request timeout Direct Map uses.
+await withServer(
+  (req, res) => {
+    req.resume();
+    if (req.url !== "/slow") {
+      res.writeHead(404, { "content-type": "text/plain" });
+      res.end("not found");
+      return;
+    }
+    setTimeout(() => {
+      res.writeHead(200, { "content-type": "text/html" });
+      res.end("<a href='/slow/a'>A</a>");
+    }, 2500);
+  },
+  async (_server, port) => {
+    const result = await runNode(["scripts/map.js", "--provider", "direct", "--direct-timeout", "1", `http://127.0.0.1:${port}/slow`]);
+    const output = parseJson(result.stdout);
+    assert.match(output.error.message, /请求超时（>1s）/);
+    assert.equal(output.diagnostics.options.direct_timeout, 1);
+  }
+);
+
 // Domain filters given to Grok reach the extra providers too, and an extra that still falls
 // outside them ranks below Grok's in-scope search results instead of displacing them.
 await withServer(

@@ -1,5 +1,5 @@
 import { trimBody } from "./http.js";
-import { inMapScope, isXUrl, mapScope, parseXPostUrl } from "./sources.js";
+import { escapeRegExp, inMapScope, isXUrl, mapScope, parseXPostUrl } from "./sources.js";
 
 const DIRECT_FETCH_MAX_BYTES = 2 * 1024 * 1024;
 const DIRECT_ERROR_PREVIEW_BYTES = 1000;
@@ -147,17 +147,15 @@ function hrefValues(html) {
  * starts from the URL it was given: the links on that page come first, then the site's sitemaps.
  * Results keep to mapScope, filtered before the limit: mapping www.compshare.cn/docs with the
  * whole sitemap on 2026-10-10 returned 200 of the site's 891 URLs, 4 under /docs and 179 under
- * /images.
+ * /images. When the page redirects (example.com to www.example.com), the scope is where it
+ * landed, as a crawler's would be; the requested host alone would filter out every link.
  */
 export async function directMap(url, options = {}) {
   const warnings = [];
-  const parsed = new URL(url);
-  const baseUrl = parsed.origin;
-  const host = parsed.hostname;
-  const scope = mapScope(url);
+  const requestedOrigin = new URL(url).origin;
   const limit = options.limit || 50;
   const maxBreadth = options.maxBreadth || 20;
-  const timeout = options.requestTimeout || DIRECT_MAP_REQUEST_TIMEOUT_SECONDS;
+  const timeout = options.directTimeout || DIRECT_MAP_REQUEST_TIMEOUT_SECONDS;
   const instructionsIgnored = Boolean(options.instructions);
 
   if (instructionsIgnored) {
@@ -167,15 +165,19 @@ export async function directMap(url, options = {}) {
     warnings.push("Direct Map only supports max-depth 1; deeper traversal requires Tavily Map.");
   }
 
-  const keep = (candidate) => inMapScope(candidate, host, scope);
-  const conventional = [`${baseUrl}/sitemap.xml`, ...(scope ? [`${baseUrl}${scope}/sitemap.xml`] : [])];
   const [robots, page] = await Promise.all([
-    fetchTextForMap(`${baseUrl}/robots.txt`, timeout),
+    fetchTextForMap(`${requestedOrigin}/robots.txt`, timeout),
     fetchTextForMap(url, timeout),
   ]);
-  const declared = robots.ok ? robotsSitemaps(robots.text, baseUrl) : [];
+  const landed = new URL(page.ok ? page.final_url || url : url);
+  const baseUrl = landed.origin;
+  const host = landed.hostname;
+  const scope = mapScope(landed.toString());
+  const keep = (candidate) => inMapScope(candidate, host, scope);
+  const conventional = [`${baseUrl}/sitemap.xml`, ...(scope ? [`${baseUrl}${scope}/sitemap.xml`] : [])];
+  const declared = robots.ok ? robotsSitemaps(robots.text, robots.final_url || requestedOrigin) : [];
   const sitemaps = await readSitemaps([...declared, ...conventional], { timeout, keep, enough: limit });
-  const links = page.ok ? absoluteUrls(hrefValues(page.text), page.final_url || url) : [];
+  const links = page.ok ? absoluteUrls(hrefValues(page.text), landed.toString()) : [];
 
   if (!page.ok && !sitemaps.found) {
     return {
@@ -194,8 +196,8 @@ export async function directMap(url, options = {}) {
   if (scope && outside.size) {
     warnings.push(`Direct Map kept URLs under ${scope}; ${outside.size} other URLs on ${host} were left out. Map ${baseUrl}/ for the whole site.`);
   }
-  if (page.ok && new URL(page.final_url || url).hostname !== host) {
-    warnings.push(`${url} redirected to ${page.final_url}; map that URL for its pages.`);
+  if (host !== new URL(url).hostname || scope !== mapScope(url)) {
+    warnings.push(`${url} redirected to ${page.final_url}; mapped ${baseUrl}${scope || "/"} instead.`);
   }
   if (!page.ok) warnings.push(`Direct Map could not read ${url}: ${page.error}`);
   if (!sitemaps.found) {
@@ -414,10 +416,6 @@ const X_DATE_PATTERN = /\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|De
 // Lines the logged-out X shell adds around (or instead of) the post.
 const X_BOILERPLATE_LINE =
   /^(?:Post|Log in|Sign up|Log in or sign up for X|See what[’']s happening and join the conversation|Continue with (?:phone|Apple|Google)|or|Log in with username or email|Relevant people|Trending now|Follow|Back|Search|Something went wrong\.?.*|Try again|Don[’']t miss what[’']s happening.*|People on X are the first to know\.?|Terms\b.*|©.*X Corp\.?|-|\d[\d.,]*[KM]?(?: Views)?|\d{1,2}:\d{2} [AP]M .*)$/i;
-
-function escapeRegExp(value) {
-  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
 
 /**
  * Did a Direct fetch of an X status page return the post, or only the login shell? X serves

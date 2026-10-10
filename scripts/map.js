@@ -22,7 +22,7 @@ Discover same-site URLs with Tavily Map or a lightweight Direct Map fallback.
 
 Timeouts:
   --timeout SECONDS         Crawl budget handed to Tavily Map (default 150)
-  --direct-timeout SECONDS  Per-request timeout for Direct Map's sitemap and home page fetches (default 30)
+  --direct-timeout SECONDS  Per-request timeout for Direct Map's robots.txt, sitemap and page fetches (default 30)
 
 Environment:
   TAVILY_API_KEY       Optional Tavily Map key

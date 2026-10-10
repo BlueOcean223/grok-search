@@ -4,7 +4,9 @@ import {
   compactSource,
   hostMatchesDomain,
   isCitationMarker,
+  inMapScope,
   isOffDomainExtra,
+  mapScope,
   mergeSources,
   parseXPostUrl,
   selectSources,
@@ -216,5 +218,16 @@ assert.deepEqual(
   selectSources(domainRanked, { maxSources: 3 }).items.map((source) => source.url),
   ["https://github.com/cited", "https://gist.github.com/extra", "https://medium.com/off"]
 );
+
+// A map stays under the URL's path; a URL that names a file maps its directory, since nothing
+// is under a file. A version segment is a directory, not a file.
+assert.equal(mapScope("https://a.example/"), "");
+assert.equal(mapScope("https://a.example/docs/"), "/docs");
+assert.equal(mapScope("https://a.example/docs/index.html"), "/docs");
+assert.equal(mapScope("https://a.example/index.php?p=1"), "");
+assert.equal(mapScope("https://a.example/docs/v1.2"), "/docs/v1.2");
+assert.equal(inMapScope("https://a.example/docs/a", "a.example", "/docs"), true);
+assert.equal(inMapScope("https://a.example/docs.html", "a.example", "/docs"), false);
+assert.equal(inMapScope("https://www.a.example/docs/a", "a.example", "/docs"), false);
 
 console.log("sources fixtures ok");

@@ -253,13 +253,21 @@ export function urlInDomains(url, domains) {
   return domains.some((domain) => hostMatchesDomain(host, domain));
 }
 
+export function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 /**
  * The path a map stays under: "/docs" for ".../docs" and ".../docs/", "" for the site root. Both
  * map providers keep to it, the scope Firecrawl's crawl uses by default ("crawl ignores sublinks
- * that are not children of the URL you provide").
+ * that are not children of the URL you provide"). A URL that names a file (".../docs/index.html")
+ * maps its directory: nothing is under a file, and the old whole-site map returned that section.
+ * An extension needs a letter, so a version segment such as "v1.2" stays a directory.
  */
 export function mapScope(url) {
-  return new URL(url).pathname.replace(/\/+$/, "");
+  const path = new URL(url).pathname;
+  const directory = /\/[^/]*\.[a-z][a-z0-9]{0,7}$/i.test(path) ? path.replace(/\/[^/]*$/, "") : path;
+  return directory.replace(/\/+$/, "");
 }
 
 /** On `host`, at or under the `scope` path. */
