@@ -238,6 +238,44 @@ export async function fitTextToStdoutBudget(output, holder, key, onCut, { budget
   return kept;
 }
 
+/**
+ * A text for stdout, behind one call: `output[key]` becomes a holder with up to `maxChars`
+ * characters of `text` from `offset` as `text`, `chars` (text only), `original_chars`, `truncated`,
+ * `full_path`, and `offset` when one was given. `[grok-search]` lines from `lead(holder)` (run once,
+ * before the fit) and `tail(shown, holder)` (run per candidate cut) surround the text. When the whole
+ * `output` would still print over the stdout budget, the text is cut further until it fits and
+ * `cutWarning` goes to `output.diagnostics.warnings`. Whatever is not shown is in the file at
+ * `full_path`: `fullPath` names one that already holds the text, else one is written as `file`
+ * (`kind`, `provider`, `label`, `extension`) says. Returns the holder.
+ */
+export async function emitText(config, output, key, { text, maxChars, offset = null, fullPath = null, file, lead = () => [], tail = () => [], cutWarning }) {
+  const preview = await previewText(config, { ...file, content: text, maxChars, offset: offset ?? 0, fullPath });
+  const holder = {
+    text: preview.preview,
+    ...(offset == null ? {} : { offset: preview.offset }),
+    chars: preview.preview.length,
+    original_chars: preview.original_length,
+    truncated: preview.truncated,
+    full_path: preview.full_output_path,
+  };
+  output[key] = holder;
+  const leadLines = lead(holder);
+  const compose = (shown) => withNotices(shown, { lead: leadLines, tail: tail(shown, holder) });
+  const kept = await fitTextToStdoutBudget(
+    output,
+    holder,
+    "text",
+    async () => {
+      holder.full_path ??= fullPath ?? (await writeFullOutput(config, { ...file, content: text }));
+      holder.truncated = true;
+      output.diagnostics.warnings.push(cutWarning);
+    },
+    { compose }
+  );
+  if (kept != null) holder.chars = kept.length;
+  return holder;
+}
+
 export function jsonReplacer(_key, value) {
   return value === undefined ? undefined : value;
 }

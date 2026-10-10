@@ -1,16 +1,7 @@
 #!/usr/bin/env node
 import { parseArgv, runCommand } from "./lib/cli.js";
 import { FETCH_CACHE_TTL_MS, readFetchCache, rememberFullPath, writeFetchCache } from "./lib/fetch-cache.js";
-import {
-  fitTextToStdoutBudget,
-  previewText,
-  runRecordBase,
-  runRecordPath,
-  STDOUT_BUDGET_BYTES,
-  withNotices,
-  writeFullOutput,
-  writeRunRecord,
-} from "./lib/output.js";
+import { emitText, runRecordBase, runRecordPath, STDOUT_BUDGET_BYTES, writeRunRecord } from "./lib/output.js";
 import { fetchUrl } from "./lib/providers.js";
 
 const DEFAULT_MAX_CHARS = 12000;
@@ -79,7 +70,7 @@ function contentNotices(args, result) {
   return notices;
 }
 
-async function publicResult(args, result, config, durationMs, notices) {
+function publicResult(args, result, durationMs, notices) {
   const ok = Boolean(result.ok);
   const warnings = [...(result.warnings || []), ...notices];
   if (Number.isFinite(result.credits_used) && result.credits_used >= HIGH_CREDITS_THRESHOLD) {
@@ -117,30 +108,13 @@ async function publicResult(args, result, config, durationMs, notices) {
     };
   }
 
-  const contentInfo = await previewText(config, {
-    kind: "fetch",
-    provider: result.provider,
-    label: result.final_url || args.url,
-    content: result.content || "",
-    maxChars: args.maxChars,
-    offset: args.offset,
-    extension: "md",
-    fullPath: result.full_path ?? null,
-  });
-
   return {
     url: args.url,
     final_url: result.final_url || args.url,
     redirected: Boolean(result.redirected),
     metadata: result.metadata || {},
-    content: {
-      text: contentInfo.preview,
-      offset: contentInfo.offset,
-      chars: contentInfo.preview.length,
-      original_chars: contentInfo.original_length,
-      truncated: contentInfo.truncated,
-      full_path: contentInfo.full_output_path,
-    },
+    // Filled by emitContent once the diagnostics it must fit beside are complete.
+    content: null,
     diagnostics,
   };
 }
@@ -159,51 +133,40 @@ function continueNotice(content, shownChars, cacheMinutes) {
 }
 
 /**
- * Put the notices into content.text and keep the whole JSON within the stdout budget:
- * `--max-chars` counts characters, what the agent's shell keeps is bytes of the whole JSON.
- * `content.chars` counts the page text shown, not the notices. `cachedAt` is when the cached copy
- * of this text was stored, null when there is none.
+ * content.text for stdout: `--max-chars` characters from `--offset`, the notices that change how to
+ * read it, and the whole JSON within the stdout budget. `content.chars` counts the page text shown,
+ * not the notices. `cachedAt` is when the cached copy of this text was stored, null when there is none.
  */
-async function finishContent(config, output, result, notices, cachedAt) {
-  const content = output.content;
-  const requestedOffset = output.diagnostics.options.offset;
+async function emitContent(config, output, args, result, notices, cachedAt) {
   const cacheMinutes = cachedAt ? Math.round((Date.parse(cachedAt) + FETCH_CACHE_TTL_MS - Date.now()) / 60000) : 0;
-  const lead = [...notices];
   const warn = (message) => {
-    lead.push(message);
     output.diagnostics.warnings.push(message);
+    return message;
   };
-  if (requestedOffset > content.original_chars) {
-    warn(`--offset ${requestedOffset} is past the end of the text, which has ${content.original_chars} characters.`);
-  }
-  // Offsets count characters of one copy of the page. A new fetch (the cached copy expired, or
-  // auto went to another provider this time) may hold different text.
-  if (requestedOffset > 0 && !result.cache) {
-    warn(
-      `This is a new fetch of the page, not the cached copy an earlier --offset hint referred to; if the text changed, --offset ${requestedOffset} does not continue where that fetch stopped.`
-    );
-  }
-  const compose = (text) => withNotices(text, { lead, tail: [continueNotice(content, text.length, cacheMinutes)].filter(Boolean) });
-  const kept = await fitTextToStdoutBudget(
-    output,
-    content,
-    "text",
-    async () => {
-      content.full_path ??= result.full_path ?? await writeFullOutput(config, {
-        kind: "fetch",
-        provider: result.provider,
-        label: output.final_url,
-        content: result.content || "",
-        extension: "md",
-      });
-      content.truncated = true;
-      output.diagnostics.warnings.push(
-        `content.text was cut to keep the whole output under ${STDOUT_BUDGET_BYTES / 1024}KB (agent shell tools cut longer output); its last line gives the --offset to continue from, and content.full_path has the full text.`
-      );
-    },
-    { compose }
-  );
-  if (kept != null) content.chars = kept.length;
+  await emitText(config, output, "content", {
+    text: result.content || "",
+    maxChars: args.maxChars,
+    offset: args.offset,
+    fullPath: result.full_path ?? null,
+    file: { kind: "fetch", provider: result.provider, label: output.final_url, extension: "md" },
+    lead: (content) => [
+      ...notices,
+      ...(args.offset > content.original_chars
+        ? [warn(`--offset ${args.offset} is past the end of the text, which has ${content.original_chars} characters.`)]
+        : []),
+      // Offsets count characters of one copy of the page. A new fetch (the cached copy expired, or
+      // auto went to another provider this time) may hold different text.
+      ...(args.offset > 0 && !result.cache
+        ? [
+            warn(
+              `This is a new fetch of the page, not the cached copy an earlier --offset hint referred to; if the text changed, --offset ${args.offset} does not continue where that fetch stopped.`
+            ),
+          ]
+        : []),
+    ],
+    tail: (shown, content) => [continueNotice(content, shown.length, cacheMinutes)].filter(Boolean),
+    cutWarning: `content.text was cut to keep the whole output under ${STDOUT_BUDGET_BYTES / 1024}KB (agent shell tools cut longer output); its last line gives the --offset to continue from, and content.full_path has the full text.`,
+  });
 }
 
 /** Durable copy of this fetch: full text (not the preview), metadata, every provider tried. */
@@ -239,10 +202,10 @@ async function fetchCommand(args, config) {
   const result = cached ?? (await fetchUrl(args.url, config, { provider: args.provider }));
   const cachedAt = cached ? cached.cache.fetched_at : await writeFetchCache(config, args.url, args.provider, result);
   const notices = contentNotices(args, result);
-  const output = await publicResult(args, result, config, Date.now() - startedAtMs, notices);
+  const output = publicResult(args, result, Date.now() - startedAtMs, notices);
   const runPath = runRecordPath(config, { kind: "fetch", label: result.final_url || args.url });
   if (runPath) output.diagnostics.run_path = runPath;
-  if (output.content) await finishContent(config, output, result, notices, cachedAt);
+  if (result.ok) await emitContent(config, output, args, result, notices, cachedAt);
   if (output.content?.full_path) await rememberFullPath(config, args.url, cachedAt, output.content.full_path);
   if (!(await writeRunRecord(config, { at: runPath, record: runRecord(config, args, output, result) }))) {
     delete output.diagnostics.run_path;

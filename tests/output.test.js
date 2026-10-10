@@ -4,6 +4,7 @@ import { mkdtemp, readFile, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
+  emitText,
   fitTextToStdoutBudget,
   previewText,
   runRecordBase,
@@ -139,6 +140,80 @@ try {
   const cut = await fitTextToStdoutBudget(output, output.answer, "text", async () => assert.fail("onCut"), { budget: 2000 });
   assert.equal(cut, null);
   assert.equal(output.answer.text.length, 500);
+}
+
+// emitText: preview, notices, budget and the full-text file behind one call.
+{
+  // Within --max-chars and the budget: the text as is, nothing filed, no warning.
+  const output = { answer: null, diagnostics: { warnings: [] } };
+  const answer = await emitText(config, output, "answer", {
+    text: "short answer",
+    maxChars: 100,
+    file: { kind: "search", provider: "grok-responses", label: "q", extension: "md" },
+    tail: (shown, holder) => (holder.truncated ? ["cut"] : []),
+    cutWarning: "cut by budget",
+  });
+  assert.equal(output.answer, answer);
+  assert.deepEqual(answer, { text: "short answer", chars: 12, original_chars: 12, truncated: false, full_path: null });
+  assert.deepEqual(output.diagnostics.warnings, []);
+}
+{
+  // --max-chars cuts first and files the text; lead and tail see the holder, chars counts text only.
+  const output = { content: null, diagnostics: { warnings: [] } };
+  const content = await emitText(config, output, "content", {
+    text: "abcdefghij",
+    maxChars: 4,
+    offset: 2,
+    file: { kind: "fetch", provider: "direct", label: "p", extension: "md" },
+    lead: (holder) => [`from ${holder.offset}`],
+    tail: (shown, holder) => [`showing ${holder.offset}-${holder.offset + shown.length} of ${holder.original_chars}`],
+    cutWarning: "cut by budget",
+  });
+  assert.equal(content.offset, 2);
+  assert.equal(content.chars, 4);
+  assert.equal(content.original_chars, 10);
+  assert.equal(content.truncated, true);
+  assert.equal(await readFile(content.full_path, "utf8"), "abcdefghij");
+  assert.equal(content.text, "[grok-search] from 2\n\ncdef\n\n[grok-search] showing 2-6 of 10");
+  assert.deepEqual(output.diagnostics.warnings, []);
+
+  // A file that already holds the text is named instead of written again.
+  const again = { content: null, diagnostics: { warnings: [] } };
+  const reused = await emitText(config, again, "content", {
+    text: "abcdefghij",
+    maxChars: 4,
+    offset: 0,
+    fullPath: content.full_path,
+    file: { kind: "fetch", provider: "direct", label: "p", extension: "md" },
+    cutWarning: "cut by budget",
+  });
+  assert.equal(reused.full_path, content.full_path);
+  assert.equal(reused.text, "abcd");
+}
+{
+  // The stdout budget cuts further, files the whole text once, warns, and the tail sees the result.
+  const text = "y".repeat(60_000);
+  const output = { content: null, diagnostics: { warnings: [] } };
+  let leads = 0;
+  const content = await emitText(config, output, "content", {
+    text,
+    maxChars: 100_000,
+    offset: 0,
+    file: { kind: "fetch", provider: "direct", label: "p", extension: "md" },
+    lead: () => {
+      leads += 1;
+      return [];
+    },
+    tail: (shown, holder) => (holder.truncated ? [`next --offset ${holder.offset + shown.length}; full text in ${holder.full_path}`] : []),
+    cutWarning: "cut by budget",
+  });
+  assert.equal(leads, 1);
+  assert.equal(content.truncated, true);
+  assert.ok(content.chars < 60_000);
+  assert.ok(stdoutBytes(output) <= STDOUT_BUDGET_BYTES);
+  assert.equal(await readFile(content.full_path, "utf8"), text);
+  assert.ok(content.text.endsWith(`[grok-search] next --offset ${content.chars}; full text in ${content.full_path}`));
+  assert.deepEqual(output.diagnostics.warnings, ["cut by budget"]);
 }
 
 console.log("output fixtures ok");

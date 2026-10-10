@@ -14,16 +14,7 @@ import {
 } from "./config.js";
 import { activeFirecrawlCooldown, cooldownSkipMessage } from "./cooldown.js";
 import { searchGrokResponses } from "./grok-responses.js";
-import {
-  fitTextToStdoutBudget,
-  previewText,
-  runRecordBase,
-  runRecordPath,
-  STDOUT_BUDGET_BYTES,
-  withNotices,
-  writeFullOutput,
-  writeRunRecord,
-} from "./output.js";
+import { emitText, runRecordBase, runRecordPath, STDOUT_BUDGET_BYTES, writeRunRecord } from "./output.js";
 import { firecrawlAuthMode, firecrawlSearch } from "./firecrawl.js";
 import { attemptFrom, skippedResult, timed } from "./provider-result.js";
 import { tavilySearch } from "./tavily.js";
@@ -514,14 +505,6 @@ export async function runSearch(args, config, adapters = {}) {
   const itemsCompact = compactSources(selected.items, { sourceChars });
   const mergedCompactFull = compactSources(rawMergedSources, { sourceChars });
 
-  const answerInfo = await previewText(config, {
-    kind: "search",
-    provider: degraded ? "search-fallback" : "grok-responses",
-    label: args.query,
-    content: grok.answer,
-    maxChars: args.maxChars,
-    extension: "md",
-  });
   const createdAt = new Date().toISOString();
   const rawPayload = buildRawSourcesPayload({
     query: args.query,
@@ -577,45 +560,21 @@ export async function runSearch(args, config, adapters = {}) {
     query: args.query,
     platform: args.platform || null,
     model: grok.model,
-    answer: {
-      text: answerInfo.preview,
-      chars: answerInfo.preview.length,
-      original_chars: answerInfo.original_length,
-      truncated: answerInfo.truncated,
-      full_path: answerInfo.full_output_path,
-    },
+    answer: null,
     sources,
     diagnostics,
   };
   // `--max-chars` counts characters; what the agent's shell keeps is bytes of the whole JSON.
   // With `--full-sources` the raw payload alone can exceed the budget; then nothing is cut.
   // A cut answer ends with a line saying so, for agents that print only answer.text.
-  const compose = (text) =>
-    withNotices(text, {
-      tail: output.answer.truncated
-        ? [`The answer was cut at ${text.length} of ${output.answer.original_chars} characters; the full answer is in ${output.answer.full_path}.`]
-        : [],
-    });
-  const kept = await fitTextToStdoutBudget(
-    output,
-    output.answer,
-    "text",
-    async () => {
-      output.answer.full_path ??= await writeFullOutput(config, {
-        kind: "search",
-        provider: degraded ? "search-fallback" : "grok-responses",
-        label: args.query,
-        content: grok.answer,
-        extension: "md",
-      });
-      output.answer.truncated = true;
-      warnings.push(
-        `answer.text keeps only the beginning so the whole output stays under ${STDOUT_BUDGET_BYTES / 1024}KB (agent shell tools cut longer output); the full text is in answer.full_path, read it in chunks.`
-      );
-    },
-    { compose }
-  );
-  if (kept != null) output.answer.chars = kept.length;
+  await emitText(config, output, "answer", {
+    text: grok.answer,
+    maxChars: args.maxChars,
+    file: { kind: "search", provider: degraded ? "search-fallback" : "grok-responses", label: args.query, extension: "md" },
+    tail: (shown, answer) =>
+      answer.truncated ? [`The answer was cut at ${shown.length} of ${answer.original_chars} characters; the full answer is in ${answer.full_path}.`] : [],
+    cutWarning: `answer.text keeps only the beginning so the whole output stays under ${STDOUT_BUDGET_BYTES / 1024}KB (agent shell tools cut longer output); the full text is in answer.full_path, read it in chunks.`,
+  });
 
   const written = await writeRunRecord(config, {
     at: runPath,
