@@ -9,8 +9,8 @@ import path from "node:path";
  * script of their own that failed. In the Claude Code and pi sessions of 2026-08-27..10-09,
  * 12 of the 109 URLs fetched in a session were fetched again within about three minutes
  * (docs.siliconflow.cn 5 times in 37 seconds), and every repeat paid a provider call.
- * Only successful results are kept, and not fallbacks (see fellBack), so a failure is always
- * retried for real.
+ * Only successful results are kept, and not fallbacks (`fallback` on fetchUrl's result), so a
+ * failure is always retried for real.
  *
  * `auto` reuses what an earlier `auto` fetch of the URL returned. An explicit provider reuses
  * any fresh result that provider produced: asking for Firecrawl after `auto` served Tavily's
@@ -82,22 +82,10 @@ export async function readFetchCache(config, url, provider) {
   };
 }
 
-/**
- * Whether the result is a fallback: an extractor (Firecrawl, Tavily) failed before the provider
- * that answered, or auto returned Direct's first copy after both failed. The failure may be a
- * rate limit or an outage that is over by the next call, so the fallback is not kept: in a
- * reproduction on 2026-10-10 (Firecrawl answering 503, no Tavily key), Direct's copy, navigation
- * and all, was cached under auto, and the next fetch never asked the recovered Firecrawl. A skipped provider (no key, a quota cooldown) does not
- * count, nor does auto's first Direct request failing, which only probes for a non-HTML answer.
- */
-function fellBack(result) {
-  return (result.tried || []).some((attempt) => attempt.reused || (attempt.provider !== "direct" && attempt.ok === false && !attempt.skipped));
-}
-
 /** Returns the entry's `cached_at`, or null when the result was not kept. */
 export async function writeFetchCache(config, url, provider, result) {
   const dir = cacheDir(config);
-  if (!dir || !result?.ok || fellBack(result)) return null;
+  if (!dir || !result?.ok || result.fallback) return null;
   try {
     await mkdir(dir, { recursive: true, mode: 0o700 });
     await sweep(dir);

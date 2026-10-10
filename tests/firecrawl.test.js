@@ -10,17 +10,10 @@ import {
   readFirecrawlCooldown,
   recordFirecrawlCooldown,
 } from "../scripts/lib/cooldown.js";
-import {
-  collapseRepeatedLines,
-  fetchUrl,
-  firecrawlMetadata,
-  firecrawlScrape,
-  firecrawlSearch,
-  tavilySearch,
-  directFirstForX,
-  validateXPostContent,
-  xDirectFirstEligible,
-} from "../scripts/lib/providers.js";
+import { collapseRepeatedLines, directFirstForX, validateXPostContent, xDirectFirstEligible } from "../scripts/lib/direct.js";
+import { firecrawlMetadata, firecrawlScrape, firecrawlSearch } from "../scripts/lib/firecrawl.js";
+import { fetchUrl } from "../scripts/lib/providers.js";
+import { tavilySearch } from "../scripts/lib/tavily.js";
 import { parseXPostUrl } from "../scripts/lib/sources.js";
 
 const stateDir = await mkdtemp(path.join(tmpdir(), "grok-search-state-"));
@@ -33,6 +26,13 @@ const baseConfig = {
   tavilyApiKey: "",
   stateDir,
 };
+
+/** An attempt without its timing, which is asserted to be there. */
+function untimed(attempt) {
+  const { duration_ms: durationMs, ...rest } = attempt;
+  assert.equal(typeof durationMs, "number");
+  return rest;
+}
 
 async function withServer(handler, callback) {
   const server = createServer(handler);
@@ -78,7 +78,6 @@ await withServer(
     assert.equal(requests, 1);
     assert.equal(result.requests, 1);
     assert.equal(result.quota_exhausted, true);
-    assert.equal(typeof result.duration_ms, "number");
     assert.match(result.error, /HTTP 429/);
 
     const cooldown = await readFirecrawlCooldown(baseConfig);
@@ -330,7 +329,7 @@ await withServer(
 
       const undeclared = await fetchUrl(`${base}/undeclared.txt`, config, { provider: "auto" });
       assert.equal(undeclared.provider, "firecrawl");
-      assert.deepEqual(undeclared.tried[0], { provider: "direct", ok: true, skipped: false, content_type: "text/plain", used: false });
+      assert.deepEqual(untimed(undeclared.tried[0]), { provider: "direct", ok: true, content_type: "text/plain", used: false });
     }
   );
 }
@@ -638,7 +637,7 @@ assert.equal(
       assert.equal(docs.provider, "direct");
       assert.equal(docs.content, "# Docs\n\nThe page as Markdown.");
       assert.match(seen.accept, /^text\/markdown, text\/html;q=0\.9/);
-      assert.deepEqual(docs.tried, [{ provider: "direct", ok: true, skipped: false, content_type: "text/markdown; charset=utf-8" }]);
+      assert.deepEqual(docs.tried.map(untimed), [{ provider: "direct", ok: true, content_type: "text/markdown; charset=utf-8" }]);
 
       const data = await fetchUrl(`${base}/data.json`, config, { provider: "auto" });
       assert.equal(data.provider, "direct");
@@ -652,7 +651,7 @@ assert.equal(
         ["direct", true],
         ["firecrawl", true],
       ]);
-      assert.deepEqual(article.tried[0], { provider: "direct", ok: true, skipped: false, content_type: "text/html", used: false });
+      assert.deepEqual(untimed(article.tried[0]), { provider: "direct", ok: true, content_type: "text/html", used: false });
       assert.deepEqual([seen.scrape, seen.extract], [1, 0]);
 
       const mislabeled = await fetchUrl(`${base}/mislabeled`, config, { provider: "auto" });
@@ -753,7 +752,7 @@ await withServer(
     assert.equal(result.provider, "direct");
     assert.match(result.content, /GitHub page/);
     assert.deepEqual(result.warnings, []);
-    assert.deepEqual(result.tried.at(-1), { provider: "direct", ok: true, skipped: false, reused: true });
+    assert.deepEqual(result.tried.at(-1), { provider: "direct", ok: true, reused: true });
     assert.equal(pageGets, 1);
   }
 );

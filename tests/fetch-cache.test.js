@@ -51,16 +51,16 @@ assert.equal(await readFetchCache(config, "https://example.com/down", "auto"), n
 assert.equal((await readdir(cacheDir)).length, 1);
 const [postFile] = await readdir(cacheDir);
 
-// Nor are fallbacks: a result served after an extractor failed, or Direct's first copy reused
-// after both did. The failure, such as a Firecrawl 503, may be over by the next call.
+// Nor are fallbacks, which fetchUrl marks: a result served after an extractor failed, or Direct's
+// first copy reused after both did. The failure, such as a Firecrawl 503, may be over by the next call.
 const fallbackUrl = "https://example.com/fallback";
-const directFirst = { provider: "direct", ok: true, skipped: false, content_type: "text/html", used: false };
 assert.equal(
   await writeFetchCache(config, fallbackUrl, "auto", {
     ok: true,
     provider: "direct",
     content: "nav and body",
-    tried: [directFirst, { provider: "firecrawl", ok: false, skipped: false, error: "HTTP 503" }, { provider: "tavily", ok: false, skipped: true }, { provider: "direct", ok: true, skipped: false, reused: true }],
+    tried: [{ provider: "direct", ok: true, reused: true }],
+    fallback: true,
   }),
   null
 );
@@ -69,17 +69,19 @@ assert.equal(
     ok: true,
     provider: "tavily",
     content: "tavily text",
-    tried: [directFirst, { provider: "firecrawl", ok: false, skipped: false, error: "Rate limit exceeded" }, { provider: "tavily", ok: true }],
+    tried: [{ provider: "firecrawl", ok: false, error: "Rate limit exceeded" }, { provider: "tavily", ok: true }],
+    fallback: true,
   }),
   null
 );
 assert.equal(await readFetchCache(config, fallbackUrl, "auto"), null);
-// A skipped provider (no key, quota cooldown) and a failed first Direct request are not failures.
+// A result fetchUrl did not mark as a fallback is kept.
 const keptAt = await writeFetchCache(config, fallbackUrl, "auto", {
   ok: true,
   provider: "firecrawl",
   content: "firecrawl text",
-  tried: [{ provider: "direct", ok: false, skipped: false, error: "HTTP 403" }, { provider: "firecrawl", ok: true }],
+  tried: [{ provider: "direct", ok: false, error: "HTTP 403" }, { provider: "firecrawl", ok: true }],
+  fallback: false,
 });
 assert.equal(typeof keptAt, "string");
 assert.equal((await readFetchCache(config, fallbackUrl, "auto")).content, "firecrawl text");

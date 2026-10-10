@@ -25,6 +25,7 @@ import {
   writeRunRecord,
 } from "./output.js";
 import { firecrawlAuthMode, firecrawlSearch } from "./firecrawl.js";
+import { attemptFrom, skippedResult, timed } from "./provider-result.js";
 import { tavilySearch } from "./tavily.js";
 import { getProxyState } from "./proxy.js";
 import { buildRawSourcesPayload, compactSources, isOffDomainExtra, mergeSources, selectSources } from "./sources.js";
@@ -35,21 +36,6 @@ const GROK_FAILURE_LABELS = {
   quota: { code: "QUOTA_EXHAUSTED", errorCode: "GROK_QUOTA_EXHAUSTED", label: "额度已耗尽", warning: "Grok Responses quota was exhausted." },
   rate_limit: { code: "RATE_LIMITED", errorCode: "GROK_RATE_LIMITED", label: "触发限流", warning: "Grok Responses was rate limited." },
 };
-
-function providerAttempt(result) {
-  return {
-    provider: result.provider,
-    ok: Boolean(result.ok),
-    count: result.sources?.length || 0,
-    ...(result.skipped ? { skipped: true } : {}),
-    ...(result.auth_mode ? { auth_mode: result.auth_mode } : {}),
-    ...(result.credits_used == null ? {} : { credits_used: result.credits_used }),
-    ...(Number.isFinite(result.requests) ? { requests: result.requests } : {}),
-    ...(Number.isFinite(result.duration_ms) ? { duration_ms: result.duration_ms } : {}),
-    ...(result.quota_exhausted ? { quota_exhausted: true } : {}),
-    ...(result.error ? { error: result.error } : {}),
-  };
-}
 
 function extraAllocation(limit, config, { firecrawlAvailable = true } = {}) {
   if (limit <= 0) return { tavily: 0, firecrawl: 0 };
@@ -77,11 +63,6 @@ async function extraSources(query, limit, config, filters, { tavily, firecrawl }
   const allocation = extraAllocation(limit, config, { firecrawlAvailable: !cooldown });
 
   // Timed per provider so the attempt says which side made the caller wait.
-  const timed = async (job) => {
-    const started = performance.now();
-    const result = await job;
-    return { ...result, duration_ms: Math.round(performance.now() - started) };
-  };
   const jobs = [];
   if (allocation.tavily > 0) jobs.push(timed(tavily(query, allocation.tavily, config, filters)));
   if (allocation.firecrawl > 0) jobs.push(timed(firecrawl(query, allocation.firecrawl, config, filters)));
@@ -91,7 +72,7 @@ async function extraSources(query, limit, config, filters, { tavily, firecrawl }
 
   const hasFilters = Boolean(filters.allowedDomains?.length || filters.excludedDomains?.length);
   for (const result of results) {
-    const attempt = providerAttempt(result);
+    const attempt = attemptFrom(result, { count: result.sources?.length || 0 });
     if (result.ok && hasFilters) {
       attempt.off_domain = (result.sources || []).filter((source) => isOffDomainExtra(source, filters)).length;
     }
@@ -103,7 +84,7 @@ async function extraSources(query, limit, config, filters, { tavily, firecrawl }
 
   if (cooldown) {
     const message = cooldownSkipMessage(cooldown);
-    providerAttempts.push({ provider: "firecrawl", ok: false, count: 0, skipped: true, auth_mode: firecrawlMode, error: message });
+    providerAttempts.push(attemptFrom(skippedResult("firecrawl", message, { auth_mode: firecrawlMode }), { count: 0 }));
     warnings.push(`firecrawl extra source search skipped: ${message}`);
   }
 
@@ -372,7 +353,7 @@ async function grokChannel(args, config, searchOptions, searchGrok) {
     sources: grok.sources,
     tool_calls: grok.tool_calls,
     warnings,
-    provider_attempts: [{ provider: `grok-responses:${config.apiProvider}`, ok: true, count: grok.sources.length, requests: grok.requests }],
+    provider_attempts: [attemptFrom({ provider: `grok-responses:${config.apiProvider}`, ok: true, requests: grok.requests }, { count: grok.sources.length })],
     diagnostics: grok.diagnostics,
     raw_content_chars: grok.content.length,
     raw: grok.raw,
@@ -394,13 +375,7 @@ function classifyGrokFailure(error) {
 }
 
 function grokFailureAttempt(config, error) {
-  return {
-    provider: `grok-responses:${config.apiProvider}`,
-    ok: false,
-    count: 0,
-    error: error.message,
-    ...(error.requests == null ? {} : { requests: error.requests }),
-  };
+  return attemptFrom({ provider: `grok-responses:${config.apiProvider}`, ok: false, error: error.message, requests: error.requests }, { count: 0 });
 }
 
 function clipText(value, max = 800) {

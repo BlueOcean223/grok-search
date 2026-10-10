@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { requestJson } from "../scripts/lib/providers.js";
+import { requestJson } from "../scripts/lib/http.js";
 
 const config = { retryMaxAttempts: 3, retryMultiplier: 0, retryMaxWait: 0.05, debug: false };
 

@@ -87,7 +87,6 @@ function redirectTarget(data, requestedUrl) {
 export async function firecrawlScrape(url, config, { timeoutMs = 90_000 } = {}) {
   const endpoint = `${config.firecrawlApiUrl.replace(/\/+$/, "")}/scrape`;
   const authMode = firecrawlAuthMode(config);
-  const startedAt = Date.now();
   const stats = { requests: 0 };
   const fail = (error, extra = {}) => ({
     ok: false,
@@ -95,7 +94,6 @@ export async function firecrawlScrape(url, config, { timeoutMs = 90_000 } = {}) 
     auth_mode: authMode,
     error,
     requests: stats.requests,
-    duration_ms: Date.now() - startedAt,
     ...extra,
   });
 
@@ -155,7 +153,6 @@ export async function firecrawlScrape(url, config, { timeoutMs = 90_000 } = {}) 
         raw: data,
         attempts: attempt + 1,
         requests: stats.requests,
-        duration_ms: Date.now() - startedAt,
         metadata,
         ...(finalUrl ? { final_url: finalUrl, redirected: true } : {}),
         ...credits,

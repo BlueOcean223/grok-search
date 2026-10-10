@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { parseArgv, runCommand } from "./lib/cli.js";
 import { runRecordBase, writeRunRecord } from "./lib/output.js";
-import { DIRECT_MAP_REQUEST_TIMEOUT_SECONDS, mapUrl } from "./lib/providers.js";
+import { DIRECT_MAP_REQUEST_TIMEOUT_SECONDS } from "./lib/direct.js";
+import { mapUrl } from "./lib/providers.js";
 
 function usage() {
   return `Usage: ./scripts/map.js [--provider auto|tavily|direct] [--instructions TEXT] [--max-depth N] [--max-breadth N] [--limit N] [--timeout SECONDS] [--direct-timeout SECONDS] [--deadline SECONDS] <url>
