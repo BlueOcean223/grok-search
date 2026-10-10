@@ -108,9 +108,26 @@ function parseArgs(argv) {
 // the keyless tier only has a few dozen per day. Worth a line so the agent can budget.
 const HIGH_CREDITS_THRESHOLD = 10;
 
+/**
+ * A deep URL that ends on the site's root page is most likely gone: gov.cn sends removed
+ * pages to its home page by script, and on 2026-10-04 Firecrawl returned that home page as
+ * an ordinary fetch. Too few redirects are on record to call this an error yet.
+ */
+function landedOnSiteRoot(requestedUrl, finalUrl) {
+  if (!finalUrl) return false;
+  try {
+    return new URL(finalUrl).pathname === "/" && new URL(requestedUrl).pathname !== "/";
+  } catch {
+    return false;
+  }
+}
+
 async function publicResult(args, result, config) {
   const ok = Boolean(result.ok);
   const warnings = [...(result.warnings || [])];
+  if (ok && result.redirected && landedOnSiteRoot(args.url, result.final_url)) {
+    warnings.push(`The page redirected to the site's home page (${result.final_url}); the requested page probably no longer exists.`);
+  }
   if (Number.isFinite(result.credits_used) && result.credits_used >= HIGH_CREDITS_THRESHOLD) {
     warnings.push(
       `Firecrawl 本次消耗 ${result.credits_used} credits（普通页面 1 credit）；keyless 免费档几次这样的抓取就会耗尽当日额度，X 原帖优先考虑 Direct。`

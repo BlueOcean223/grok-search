@@ -5,8 +5,8 @@ Read this when a result mentions a skipped or failed provider, when configuratio
 ## Provider Order
 
 - `search.js`: Grok Responses runs alongside independent Tavily Search (needs `TAVILY_API_KEY`) and Firecrawl Search (keyless by default, `FIRECRAWL_API_KEY` when set). Extras are never fed into Grok. The default combined extra target is 6; `--extra N` changes it, `--no-extra` disables both extras and the degraded fallback. On `--source x` extras are off unless `--extra N` is given (`extra_mode: "off-x-only"`).
-- `fetch.js --provider auto`: Tavily Extract → Firecrawl Scrape → Direct Fetch. Exception: X post URLs try Direct first regardless of keys (`references/x-search.md`).
-- `map.js --provider auto`: Tavily Map → Direct Map.
+- `fetch.js --provider auto`: Tavily Extract → Firecrawl Scrape → Direct Fetch. Exception: X post URLs try Direct first regardless of keys (`references/x-search.md`). A Firecrawl page whose target status is 400 or more counts as a failure. `final_url` / `redirected` show where the fetch ended; a deep URL that ends on the site's home page adds a warning, since the page is most likely gone.
+- `map.js --provider auto`: Tavily Map → Direct Map. An empty Tavily list also falls through to Direct Map.
 - `--responses-openrouter-engine exa` forces a web-only engine on OpenRouter.
 
 Domain filters apply to all channels: `--responses-allowed-domains` / `--responses-excluded-domains` are pushed to Tavily (`include_domains`/`exclude_domains`) and Firecrawl (`includeDomains`/`excludeDomains`). Anything that still comes back off-domain is ranked after Grok's own results, not dropped. `diagnostics.options.extra_domain_filter` reports `pushed`, `demoted`, or `none`; extra attempts report `off_domain`.

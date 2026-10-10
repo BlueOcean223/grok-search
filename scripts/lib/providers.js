@@ -42,8 +42,22 @@ export async function mapUrl(url, config, { provider = "auto", ...options } = {}
 
   if (provider === "auto" || provider === "tavily") {
     const result = await tavilyMap(url, options, config);
-    tried.push({ provider: result.provider, ok: result.ok, skipped: Boolean(result.skipped), error: result.error });
-    if (result.ok || provider === "tavily") return { ...result, tried };
+    // Tavily can map a site to an empty list that Direct Map reads fine from its sitemap:
+    // www.compshare.cn/docs gave 0 URLs on 2026-10-07 and 200 from Direct on 10-10. Under auto
+    // an empty list hands over like a failure.
+    const empty = result.ok && !result.results.length;
+    const handOver = empty && provider === "auto";
+    tried.push({
+      provider: result.provider,
+      ok: result.ok && !handOver,
+      skipped: Boolean(result.skipped),
+      error: handOver ? "returned no URLs" : result.error,
+    });
+    if (result.ok && !handOver) {
+      const warnings = empty ? ["Tavily Map returned no URLs; --provider direct reads the site's sitemap.xml and home page instead."] : [];
+      return { ...result, warnings: [...(result.warnings || []), ...warnings], tried };
+    }
+    if (provider === "tavily") return { ...result, tried };
   }
 
   if (provider === "auto") {

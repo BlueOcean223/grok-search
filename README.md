@@ -305,6 +305,8 @@ Tavily Extract -> Firecrawl Scrape -> Direct Fetch
 
 Direct Fetch 是普通 HTTP(S) 文本页面的 best-effort fallback。它会做简单 HTML 清理、尽量格式化 JSON、记录重定向，并拒绝二进制 / 附件 / 超大响应。
 
+Firecrawl 会把目标页的状态码一并返回：状态码 ≥ 400 的页面按失败处理，交给下一个 provider（2026-09-15 至 10-06 记录在案的 7 次全是 404 / 503 错误页）。Firecrawl 和 Direct 都会把最终 URL 写进 `final_url` / `redirected`；带路径的 URL 最终落在站点首页时写一条 warning，这种情况多半是页面已删除（例如 gov.cn 用脚本把已删除的页面跳回首页）。
+
 Firecrawl Scrape 无 key 时会使用 Keyless；配置 `FIRECRAWL_API_KEY` 后会自动发送 Bearer token。当前认证模式写入 `diagnostics.firecrawl_auth_mode`。
 
 X 原帖（`x.com/<handle>/status/<id>`）在 `--provider auto` 下不论是否配置 key 都先走 Direct，校验页面含 `@handle`、日期与非登录页正文才算成功（只有主帖）；校验不过再回到 Tavily → Firecrawl，都不可用时按原样返回 Direct 内容并写 warning。这样定的依据是 2026-09-08 的对照：Tavily 快且免费但三条里一条不带日期、另有一次超时；Firecrawl 每条约 30 credits、10 秒以上，换来 ISO 时间戳、互动数和 thread。需要 thread 时显式 `--provider firecrawl`。任何一次 `credits_used >= 10` 都会在 `diagnostics.warnings` 里说明成本。
@@ -327,7 +329,7 @@ fetch 成功输出使用 `content.text`、`content.chars`、`content.original_ch
 Tavily Map -> Direct Map
 ```
 
-没有 `TAVILY_API_KEY` 时，Tavily Map 不可用，`map.js` 会 fallback 到 Direct Map。Direct Map 只检查同站点 `/sitemap.xml`，然后提取首页同域名链接。它会忽略 `--instructions`，且只支持 `--max-depth 1`。
+没有 `TAVILY_API_KEY` 时，Tavily Map 不可用，`map.js` 会 fallback 到 Direct Map；Tavily Map 返回空列表时也一样（显式 `--provider tavily` 时原样返回空列表并写 warning）。Direct Map 只检查同站点 `/sitemap.xml`，然后提取首页同域名链接。它会忽略 `--instructions`，且只支持 `--max-depth 1`。
 
 `--timeout`（默认 150 秒）是交给 Tavily Map 的远端 crawl 预算；Direct Map 自己抓 sitemap 和首页时每个请求用独立的 `--direct-timeout`（默认 30 秒），一个卡住的请求不会吃掉整条命令的 deadline。两个值都记录在 `diagnostics.options`。
 

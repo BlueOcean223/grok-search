@@ -1,5 +1,5 @@
 import { recordFirecrawlCooldown } from "./cooldown.js";
-import { authHeaders, backoffMs, debugLog, isPlainObject, requestJson, sleep, upstreamMessage } from "./http.js";
+import { authHeaders, backoffMs, debugLog, isPlainObject, requestJson, sleep, trimBody, upstreamMessage } from "./http.js";
 import { domainFilters } from "./sources.js";
 
 export function firecrawlAuthMode(config) {
@@ -52,6 +52,29 @@ export function firecrawlMetadata(data) {
     if (value === undefined) delete out[key];
   }
   return out;
+}
+
+function withoutHash(value) {
+  try {
+    const url = new URL(value);
+    url.hash = "";
+    return url.toString();
+  } catch {
+    return value;
+  }
+}
+
+/**
+ * `metadata.url` is where Firecrawl's browser ended up; `sourceURL` is what was asked for.
+ * gov.cn answers a removed page with a 404 whose script jumps to the home page, and Firecrawl
+ * followed it and reported 200 for the home page (checked 2026-10-10), so the final URL is the
+ * only sign of what happened. Returns it when it differs from the requested URL.
+ */
+function redirectTarget(data, requestedUrl) {
+  const meta = data?.data?.metadata ?? data?.metadata;
+  const finalUrl = typeof meta?.url === "string" ? meta.url.trim() : "";
+  if (!/^https?:\/\//i.test(finalUrl)) return null;
+  return withoutHash(finalUrl) === withoutHash(requestedUrl) ? null : finalUrl;
 }
 
 /**
@@ -109,6 +132,16 @@ export async function firecrawlScrape(url, config, { timeoutMs = 90_000 } = {}) 
 
     const content = data?.data?.markdown || data?.markdown || "";
     if (content.trim()) {
+      const metadata = firecrawlMetadata(data);
+      const credits = Number.isFinite(data?.data?.metadata?.creditsUsed) ? { credits_used: data.data.metadata.creditsUsed } : {};
+      // Firecrawl returns the markdown of whatever the target served, with the target's status
+      // beside it. All seven pages it returned with a status of 400 or more (2026-09-15 to
+      // 10-06) were error pages, such as "Page Not Found" or Google's "503. That's an error.",
+      // so such a page hands over to the next provider like any other failure.
+      if (Number(metadata.status) >= 400) {
+        return fail(`target page returned HTTP ${metadata.status}`, { metadata, error_preview: trimBody(content.trim(), 300), ...credits });
+      }
+      const finalUrl = redirectTarget(data, url);
       return {
         ok: true,
         provider: "firecrawl",
@@ -118,8 +151,9 @@ export async function firecrawlScrape(url, config, { timeoutMs = 90_000 } = {}) 
         attempts: attempt + 1,
         requests: stats.requests,
         duration_ms: Date.now() - startedAt,
-        metadata: firecrawlMetadata(data),
-        ...(Number.isFinite(data?.data?.metadata?.creditsUsed) ? { credits_used: data.data.metadata.creditsUsed } : {}),
+        metadata,
+        ...(finalUrl ? { final_url: finalUrl, redirected: true } : {}),
+        ...credits,
       };
     }
 

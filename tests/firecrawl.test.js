@@ -161,6 +161,95 @@ await withServer(
     });
     assert.equal(result.tried.at(-1).requests, 1);
     assert.equal(await readFirecrawlCooldown(baseConfig), null);
+    assert.equal(Object.hasOwn(result, "final_url"), false);
+  }
+);
+
+// Firecrawl renders whatever the target served and reports the target's status beside it.
+// Every page on record with a status of 400 or more was an error page, so it hands over to
+// Direct, and the final error names both failures.
+await withServer(
+  (req, res) => {
+    req.resume();
+    if (req.url.startsWith("/scrape")) {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify({
+          success: true,
+          data: { markdown: "404\n\n# 页面未找到\n\n抱歉,您访问的页面不存在或已被移动。", metadata: { statusCode: 404, creditsUsed: 1 } },
+        })
+      );
+      return;
+    }
+    res.writeHead(404, { "content-type": "text/html" });
+    res.end("<title>Not found</title>");
+  },
+  async (base) => {
+    const scraped = await firecrawlScrape(`${base}/gone`, { ...baseConfig, firecrawlApiUrl: base });
+    assert.equal(scraped.ok, false);
+    assert.equal(scraped.error, "target page returned HTTP 404");
+    assert.match(scraped.error_preview, /页面未找到/);
+    assert.equal(scraped.credits_used, 1);
+
+    const fetched = await fetchUrl(`${base}/gone`, { ...baseConfig, firecrawlApiUrl: base }, { provider: "auto" });
+    assert.equal(fetched.ok, false);
+    assert.deepEqual(
+      fetched.tried.map((attempt) => [attempt.provider, attempt.ok]),
+      [
+        ["tavily", false],
+        ["firecrawl", false],
+        ["direct", false],
+      ]
+    );
+    assert.match(fetched.error, /firecrawl: target page returned HTTP 404/);
+    assert.match(fetched.error, /direct: HTTP 404/);
+  }
+);
+
+// metadata.url is where Firecrawl's browser ended up. gov.cn sends a removed page to its home
+// page by script and Firecrawl reports 200 there (checked 2026-10-10); only this field shows it.
+// A fragment alone is not a redirect.
+await withServer(
+  (req, res) => {
+    readBody(req, (body) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      const landed = body.url.includes("gov.cn") ? "https://www.gov.cn/" : body.url.replace(/#.*$/, "");
+      res.end(JSON.stringify({ success: true, data: { markdown: "# Page", metadata: { statusCode: 200, sourceURL: body.url, url: landed } } }));
+    });
+  },
+  async (base) => {
+    const moved = await firecrawlScrape("https://www.gov.cn/zhengce/content/202511/content_7038000.htm", { ...baseConfig, firecrawlApiUrl: base });
+    assert.equal(moved.ok, true);
+    assert.equal(moved.final_url, "https://www.gov.cn/");
+    assert.equal(moved.redirected, true);
+
+    const same = await firecrawlScrape("https://example.com/a#part", { ...baseConfig, firecrawlApiUrl: base });
+    assert.equal(same.ok, true);
+    assert.equal(Object.hasOwn(same, "final_url"), false);
+  }
+);
+
+// Direct turns an HTML <title> into a "# " line, so a script-only shell still has text. Reddit
+// served one on 2026-10-08 and the fetch came back as "# Reddit" with no warning.
+await withServer(
+  (req, res) => {
+    req.resume();
+    res.writeHead(200, { "content-type": "text/html" });
+    res.end(
+      req.url === "/shell"
+        ? "<html><head><title>Reddit</title></head><body><script>boot()</script></body></html>"
+        : "<html><head><title>Post</title></head><body><p>Post body</p></body></html>"
+    );
+  },
+  async (base) => {
+    const shell = await fetchUrl(`${base}/shell`, baseConfig, { provider: "direct" });
+    assert.equal(shell.ok, true);
+    assert.equal(shell.content, "# Reddit");
+    assert.equal(shell.warnings.some((warning) => /no text beyond the page title/.test(warning)), true);
+
+    const page = await fetchUrl(`${base}/post`, baseConfig, { provider: "direct" });
+    assert.equal(page.ok, true);
+    assert.deepEqual(page.warnings, []);
   }
 );
 

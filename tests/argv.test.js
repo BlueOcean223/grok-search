@@ -1205,6 +1205,68 @@ await withServer(
   }
 );
 
+// A deep URL that ends on the site's root page (gov.cn's script redirect for removed pages)
+// reports the final URL and a warning instead of passing as an ordinary fetch.
+await withServer(
+  (req, res) => {
+    readJson(req, (body) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify({ success: true, data: { markdown: "# 中国政府网\n\n首页", metadata: { statusCode: 200, sourceURL: body.url, url: "https://www.gov.cn/" } } })
+      );
+    });
+  },
+  async (_server, port) => {
+    const fetchResult = await runNode(
+      ["scripts/fetch.js", "--provider", "firecrawl", "https://www.gov.cn/zhengce/content/202511/content_7038000.htm"],
+      { FIRECRAWL_API_URL: `http://127.0.0.1:${port}` }
+    );
+    assert.equal(fetchResult.code, 0);
+    const output = parseJson(fetchResult.stdout);
+    assert.equal(output.final_url, "https://www.gov.cn/");
+    assert.equal(output.redirected, true);
+    assert.match(output.diagnostics.warnings.join("\n"), /redirected to the site's home page \(https:\/\/www\.gov\.cn\/\)/);
+  }
+);
+
+// Tavily mapped www.compshare.cn/docs to an empty list (2026-10-07) while Direct read 200 URLs
+// from the sitemap. Under auto an empty list falls through to Direct; asked for by name, Tavily's
+// empty answer stands, with a warning.
+await withServer(
+  (req, res) => {
+    req.resume();
+    if (req.url === "/tavily/map") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ base_url: `http://${req.headers.host}`, results: [] }));
+      return;
+    }
+    if (req.url === "/sitemap.xml") {
+      res.writeHead(200, { "content-type": "application/xml" });
+      res.end(`<urlset><url><loc>http://${req.headers.host}/docs/a</loc></url></urlset>`);
+      return;
+    }
+    res.writeHead(404, { "content-type": "text/plain" });
+    res.end("not found");
+  },
+  async (_server, port) => {
+    const env = { TAVILY_API_KEY: "tavily-key", TAVILY_API_URL: `http://127.0.0.1:${port}/tavily` };
+    const auto = parseJson((await runNode(["scripts/map.js", `http://127.0.0.1:${port}/docs`], env)).stdout);
+    assert.deepEqual(auto.urls, [`http://127.0.0.1:${port}/docs/a`]);
+    assert.equal(auto.diagnostics.provider, "direct");
+    assert.deepEqual(
+      auto.diagnostics.provider_attempts.map((attempt) => [attempt.provider, attempt.ok, attempt.error ?? null]),
+      [
+        ["tavily", false, "returned no URLs"],
+        ["direct", true, null],
+      ]
+    );
+
+    const named = parseJson((await runNode(["scripts/map.js", "--provider", "tavily", `http://127.0.0.1:${port}/docs`], env)).stdout);
+    assert.deepEqual(named.urls, []);
+    assert.match(named.diagnostics.warnings.join("\n"), /Tavily Map returned no URLs/);
+  }
+);
+
 // Domain filters given to Grok reach the extra providers too, and an extra that still falls
 // outside them ranks below Grok's in-scope search results instead of displacing them.
 await withServer(

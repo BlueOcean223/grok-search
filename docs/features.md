@@ -85,6 +85,8 @@ Tavily Extract → Firecrawl Scrape → Direct Fetch
 
 Firecrawl 无 key 时走 Keyless；带 key 时自动发送 Bearer token。当前模式写入 `diagnostics.firecrawl_auth_mode`。
 
+Firecrawl 返回的目标页状态码 ≥ 400 时按失败处理，交给下一个 provider（记录在案的 7 次都是错误页）。`final_url` / `redirected` 来自 Firecrawl 的 `metadata.url` 或 Direct 的最终响应；带路径的 URL 落在站点首页时写 warning（gov.cn 用脚本把已删除的页面跳回首页，Firecrawl 跟过去后报 200）。
+
 X 原帖在 `auto` 下不论 key 都先走 Direct（校验 handle、日期、正文；只有主帖）；要 thread、ISO 时间戳、互动数时显式 `--provider firecrawl`（约 30 credits）。单次 `credits_used >= 10` 会在 warnings 中说明成本。额度耗尽后进入冷却，auto 模式跳过 Firecrawl 直到 `retry_after_seconds` 到期。
 
 `metadata` 归一为 `{ title, description, author, published_at, language, status, source_url }`；运行记录路径在 `diagnostics.run_path`。
@@ -103,7 +105,7 @@ X 原帖在 `auto` 下不论 key 都先走 Direct（校验 handle、日期、正
 Tavily Map → Direct Map
 ```
 
-Direct Map 只检查 `/sitemap.xml` 和首页同域链接。
+Tavily Map 返回空列表时 `auto` 也交给 Direct Map；显式 `--provider tavily` 原样返回并写 warning。Direct Map 只检查 `/sitemap.xml` 和首页同域链接。
 
 ## 核心配置
 

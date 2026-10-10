@@ -312,6 +312,8 @@ Tavily Extract -> Firecrawl Scrape -> Direct Fetch
 
 Direct Fetch is a best-effort fallback for normal HTTP(S) text pages. It strips simple HTML, formats JSON when possible, records redirects, and rejects binary/attachment/oversized responses.
 
+Firecrawl reports the target page's status with its markdown: a page with a status of 400 or more counts as a failure and goes to the next provider (all seven on record from 2026-09-15 to 10-06 were 404/503 error pages). Firecrawl and Direct both report where the fetch ended in `final_url` / `redirected`; a URL with a path that ends on the site's home page adds a warning, because the page has most likely been removed (gov.cn, for one, sends removed pages to its home page by script).
+
 Firecrawl Scrape uses Keyless without a key and automatically sends a Bearer token when `FIRECRAWL_API_KEY` is configured. The active mode is exposed as `diagnostics.firecrawl_auth_mode`.
 
 X posts (`x.com/<handle>/status/<id>`) under `--provider auto` try Direct first regardless of keys, and count as success only when the page names the handle, carries a date, and has non-boilerplate text (main post only). If validation fails the normal Tavily → Firecrawl order runs; if that is unavailable too, the Direct text is returned with a warning. The 2026-09-08 side-by-side is the reason: Tavily is fast and free but returned one of three posts without a date and timed out on another; Firecrawl costs about 30 credits and 10+ seconds per post in exchange for ISO timestamps, engagement counts and the thread. Use `--provider firecrawl` explicitly when you need the thread. Any fetch with `credits_used >= 10` adds a cost warning to `diagnostics.warnings`.
@@ -334,7 +336,7 @@ Provider order for `--provider auto`:
 Tavily Map -> Direct Map
 ```
 
-Without `TAVILY_API_KEY`, Tavily Map is unavailable and `map.js` falls back to Direct Map. Direct Map only checks same-site `/sitemap.xml`, then same-domain links on the homepage. It ignores `--instructions` and supports only `--max-depth 1`.
+Without `TAVILY_API_KEY`, Tavily Map is unavailable and `map.js` falls back to Direct Map; it also falls back when Tavily Map returns an empty list (with an explicit `--provider tavily` the empty list is returned with a warning). Direct Map only checks same-site `/sitemap.xml`, then same-domain links on the homepage. It ignores `--instructions` and supports only `--max-depth 1`.
 
 `--timeout` (default 150s) is the crawl budget handed to Tavily Map; Direct Map's own requests for the sitemap and home page use a separate `--direct-timeout` (default 30s), so one stalled request cannot consume most of the command deadline. Both values are recorded in `diagnostics.options`.
 

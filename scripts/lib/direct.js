@@ -468,7 +468,11 @@ export async function directFetch(url, options = {}) {
     }
 
     const content = renderDirectContent(body.text, contentType, finalUrl);
-    if (!content) warnings.push("Direct Fetch 返回空文本；页面可能依赖 JavaScript 渲染或无正文。");
+    // HTML gets its <title> as a "# " line, so an empty page still yields text. Reddit served
+    // a script-only shell on 2026-10-08 and the fetch came back as just "# Reddit".
+    if (!content.replace(/^# [^\n]*\n*/, "").trim()) {
+      warnings.push("Direct Fetch got no text beyond the page title; the page may need JavaScript or block automated access.");
+    }
 
     return finish({
       ok: true,
