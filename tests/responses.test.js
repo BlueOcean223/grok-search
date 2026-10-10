@@ -373,6 +373,34 @@ const noUsageParsed = parseGrokResponses({
 });
 assert.deepEqual(noUsageParsed.diagnostics.responses_tool_call_counts, { upstream: null, trace: { web: 1, x: 0 } });
 
+// A failed call read nothing and usage leaves it out, so it does not count and does not mark
+// its URL opened. Seen live 2026-10-04: Grok guessed a xinhuanet URL, open_page failed, and
+// the card still ranked above the Tavily result that held the answer.
+const failedCallParsed = parseGrokResponses({
+  output: [
+    {
+      type: "web_search_call",
+      status: "completed",
+      action: { type: "search", query: "a", sources: [{ url: "https://www.gov.cn/listed", title: "Listed" }] },
+    },
+    { type: "web_search_call", status: "failed", action: { type: "open_page", url: "https://www.xinhuanet.com/guessed.htm" } },
+    { type: "web_search_call", status: "failed", action: { type: "open_page", url: "https://www.gov.cn/listed" } },
+    { type: "web_search_call", status: "failed", action: { type: "find_in_page", url: "https://www.gov.cn/listed", pattern: "x" } },
+    { type: "message", content: [{ type: "output_text", text: "Answer." }] },
+  ],
+  usage: { server_side_tool_usage_details: { web_search_calls: 1, x_search_calls: 0 } },
+});
+assert.equal(failedCallParsed.diagnostics.responses_web_search_calls, 1);
+assert.deepEqual(failedCallParsed.diagnostics.responses_tool_call_counts.trace, { web: 1, x: 0 });
+assert.deepEqual(
+  failedCallParsed.sources.map((source) => [source.url, source.opened === true]),
+  [["https://www.gov.cn/listed", false]]
+);
+assert.deepEqual(
+  failedCallParsed.diagnostics.responses_tool_calls.map((call) => call.status),
+  ["completed", "failed", "failed", "failed"]
+);
+
 // A marker title ("1") on the citation is a placeholder: the real title from the search
 // listing replaces it, and a page Grok opened is marked as such on the existing card.
 const markerParsed = parseGrokResponses({

@@ -211,8 +211,11 @@ await withServer(
       assert.equal(body.max_turns, 3);
       assert.equal(body.stream, false);
       assert.deepEqual(body.tools, [{ type: "web_search" }]);
+      // A failed open_page stays out of total and by_action; the summary lists it under failed.
+      const payload = responsesPayload();
+      payload.output.push({ type: "web_search_call", status: "failed", action: { type: "open_page", url: "https://dead.example/x" } });
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify(responsesPayload()));
+      res.end(JSON.stringify(payload));
     });
   },
   async (_server, port) => {
@@ -234,6 +237,7 @@ await withServer(
       upstream: null,
       trace: { web: 1, x: 0 },
       by_action: { search: 1 },
+      failed: [{ tool: "web_search", type: "web_search_call", status: "failed", action_type: "open_page", url: "https://dead.example/x", source_count: 0 }],
     });
     // Prompt budget is advisory; the block just puts it next to what was actually used.
     assert.deepEqual(output.diagnostics.search_budget, {

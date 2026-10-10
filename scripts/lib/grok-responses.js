@@ -367,8 +367,15 @@ function extractSearchedSources(data, defaultTool) {
   for (const item of outputItems(data)) {
     if (!isSearchToolCall(item)) continue;
     const tool = toolFromCall(item, defaultTool);
-    if (tool.includes("x_search")) xSearchCalls += 1;
-    else if (tool.includes("web_search") || tool.includes("openrouter:web_search")) webSearchCalls += 1;
+    // A failed call (open_page on a dead or guessed URL, find_in_page on a page that did not
+    // load) read nothing and is left out of the billed usage, so it neither counts nor marks
+    // a page opened. It stays in toolCalls with its status for the `failed` summary.
+    const status = textField(item?.status);
+    const failed = Boolean(status) && status !== "completed";
+    if (!failed) {
+      if (tool.includes("x_search")) xSearchCalls += 1;
+      else if (tool.includes("web_search") || tool.includes("openrouter:web_search")) webSearchCalls += 1;
+    }
 
     const customName = customXToolName(item);
     const customInput = customName ? customToolInput(item) : {};
@@ -377,7 +384,7 @@ function extractSearchedSources(data, defaultTool) {
     const actionType = textField(item?.action?.type) || (customName ? customName.replace(/^x_/i, "") : "");
     const actionUrl = textField(item?.action?.url) || textField(customInput.url);
     const actionQuery = textField(item?.action?.query) || textField(customInput.query);
-    if (actionType === "open_page" && /^https?:\/\//i.test(actionUrl)) {
+    if (!failed && actionType === "open_page" && /^https?:\/\//i.test(actionUrl)) {
       const key = normalizeSourceUrl(actionUrl);
       if (!openedUrls.has(key)) openedUrls.set(key, tool);
     }
@@ -395,7 +402,7 @@ function extractSearchedSources(data, defaultTool) {
     toolCalls.push({
       tool,
       ...(textField(item?.type) ? { type: textField(item.type) } : {}),
-      ...(textField(item?.status) ? { status: textField(item.status) } : {}),
+      ...(status ? { status } : {}),
       ...(actionType ? { action_type: actionType } : {}),
       ...(actionQuery ? { query: actionQuery } : {}),
       ...(actionUrl ? { url: actionUrl } : {}),

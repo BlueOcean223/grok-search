@@ -717,8 +717,10 @@ function responsesDiagnosticOptions(searchOptions) {
  */
 function summarizeToolCalls(toolCalls, total, counts) {
   const failed = toolCalls.filter((call) => call.status && call.status !== "completed");
+  // Failed calls are listed under `failed` only, as the trace count leaves them out too.
   const byAction = {};
   for (const call of toolCalls) {
+    if (failed.includes(call)) continue;
     const action = call.action_type || "other";
     byAction[action] = (byAction[action] || 0) + 1;
   }

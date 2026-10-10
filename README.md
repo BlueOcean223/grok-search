@@ -263,12 +263,12 @@ X citation 只返回裸 URL、且 `title` 是 inline citation 序号，因此 so
 `search.js` 只使用 Responses 协议，以 `stream:false` 调用 `{GROK_API_URL}/responses`，启用 provider-native web search，并返回：
 
 - `answer.text`、`answer.chars`、`answer.original_chars`、`answer.truncated`、`answer.full_path`
-- `sources.items`：单份去重合并后的短 source card 列表，默认最多 `12` 条（`--max-sources` 可调）；裁剪顺序为 `citation` > `opened: true`（Grok 用 `open_page` 读过的页面）> 域内 extra > `searched` > 域外 extra。同一 URL 跨通道出现时合并成一张卡，`merged_from` 列出补充了字段的 provider；`"1"`、`[2]` 这类序号标题视为缺失：有真标题就替换，没有就不输出 `title`
+- `sources.items`：单份去重合并后的短 source card 列表，默认最多 `12` 条（`--max-sources` 可调）；裁剪顺序为 `citation` > `opened: true`（Grok 用 `open_page` 成功读过的页面）> 域内 extra > `searched` > 域外 extra。同一 URL 跨通道出现时合并成一张卡，`merged_from` 列出补充了字段的 provider；`"1"`、`[2]` 这类序号标题视为缺失：有真标题就替换，没有就不输出 `title`
 - `sources.returned` / `sources.total` / `sources.omitted`：让调用方明确知道是否被截断
 - `sources.raw_path`：总是有值（除非 `GROK_RUN_LOG=off`），指向本次调用的运行记录：脱敏 argv、query、instructions、生效 options、完整 answer、未裁剪的 source 列表、`grok_tool_calls`、diagnostics；失败与 `DEADLINE_EXCEEDED` 也会写
 - `sources.raw`，仅在使用 `--full-sources` 时出现
 - `diagnostics.responses_model`：中转实际返回的模型；与请求的不同时 `warnings` 里会有一条（2026-09-08 发现某中转对每次 `grok-4.5` 请求都返回 `grok-4.5-build`，调用次数和费用是 2–3 倍）
-- `diagnostics.grok_endpoint`、`diagnostics.usage` / `diagnostics.cost_usd`（provider 返回时）、`diagnostics.responses_*`（`responses_tool_calls` 为 `{ total, upstream: { web, x } | null, trace: { web, x }, by_action, failed? }` 摘要，完整列表在 `raw_path` 中）、`diagnostics.search_budget`（prompt 里的软预算与实际次数并列，`enforced: false`）、`diagnostics.warnings`、`diagnostics.provider_attempts`、`diagnostics.options`、`diagnostics.duration_ms`、`diagnostics.searched_at`
+- `diagnostics.grok_endpoint`、`diagnostics.usage` / `diagnostics.cost_usd`（provider 返回时）、`diagnostics.responses_*`（`responses_tool_calls` 为 `{ total, upstream: { web, x } | null, trace: { web, x }, by_action, failed? }` 摘要，失败的调用只列在 `failed`、不计入其余计数，完整列表在 `raw_path` 中）、`diagnostics.search_budget`（prompt 里的软预算与实际次数并列，`enforced: false`）、`diagnostics.warnings`、`diagnostics.provider_attempts`、`diagnostics.options`、`diagnostics.duration_ms`、`diagnostics.searched_at`
 
 默认会同时发起 Grok Responses、Tavily Search（配置 key 时）和 Firecrawl Search。三路并行，Tavily/Firecrawl 结果始终作为独立补充信源，不会注入 Grok input。
 
