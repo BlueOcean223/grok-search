@@ -226,6 +226,7 @@ Firecrawl Search（Keyless/key）┘
 - `responses_model`：中转实际返回的 `model`；与请求不同时写 warning。第一个中转对每次 `grok-4.5` 请求都返回 `grok-4.5-build`，这才是它 2–3 倍调用次数的来源
 - grok-4.6 的回答截断：模型写到第一个行内引用就停止输出，`status` 仍是 `completed`、没有 `incomplete_details`，回答只剩开头一两段、没有链接，随后附上起止位置为 0 的检索结果清单。2026-10-10 在官方 `api.x.ai` 和两家中转上都复现，历史 run record 里约六分之一的 web 搜索中招；同一批问题 grok-4.7 跑 15 次没有出现。解析器无法补回缺失内容，也不自动重试（grok-4.7 不用行内引用时也会给出完整但没有链接的回答，按"无链接"判断截断会误报）
 - 中转差异还包括：X 搜索以 `custom_tool_call`（`x_keyword_search` / `x_thread_fetch` …）形式返回，解析器按 `x_search` 计数并把 `by_action` 写成 `keyword_search` / `thread_fetch`；每个 turn 的过场 message（"I'll search X…"）被丢弃，`answer.text` 只取最后一条，除非前面的 message 很长或带 citation
+- xAI 的引用渲染标记偶尔漏进正文：私用区字符包着的 `\ue200render_inline_citation speecheo_citation_id="10"\ue201`（grok-4.6，2026-10-08），或链接后裸露的 `show render_inline_citation with citation_id="2"`（grok-4.6-build，2026-09-17）。解析器删掉这两种标记，周围的正文和链接不动
 - `options.instructions_chars`（传了 `--instructions` 时）
 - `extra_allocation`
 - `firecrawl_auth_mode`

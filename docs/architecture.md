@@ -49,7 +49,7 @@ query
        └─ diagnostics
 ```
 
-Tavily 与 Firecrawl 永远是独立证据通道，不进入 Grok input。`--extra N` 是两家合计的目标数；默认 6，两家可用时均分，奇数优先 Tavily。两家都只搜网页，所以 `--source x` 下默认不跑（`extra_mode: off-x-only`，写 warning），`--extra N` 可强制；`--source both` 仍默认跑。`--responses-allowed-domains` / `--responses-excluded-domains` 会下推给两家（Tavily `include_domains` / `exclude_domains`，Firecrawl `includeDomains` / `excludeDomains`），仍漏进来的域外结果降到最后一档而不丢弃。`--instructions` 只进 Grok 的 user message，两家只收 query。
+Tavily 与 Firecrawl 永远是独立证据通道，不进入 Grok input。`--extra N` 是两家合计的目标数；默认 6，两家可用时均分，奇数优先 Tavily。两家都只搜网页，所以 `--source x` 下默认不跑（`extra_mode: off-x-only`），`--extra N` 可强制；`--source both` 仍默认跑。`--responses-allowed-domains` / `--responses-excluded-domains` 会下推给两家（Tavily `include_domains` / `exclude_domains`，Firecrawl `includeDomains` / `excludeDomains`），仍漏进来的域外结果降到最后一档而不丢弃。`--instructions` 只进 Grok 的 user message，两家只收 query。
 
 Firecrawl 处于额度冷却期（`<stateDir>/firecrawl-cooldown.json`，见下）时 search 直接跳过它：有 Tavily 则名额全给 Tavily，否则 extra 为空并写 warning。
 
@@ -101,13 +101,13 @@ Direct Map 刻意保持浅层，不执行 JavaScript，并忽略自然语言过�
 - `usage`、`cost_in_usd_ticks`、`cost_usd`
 - `search_source`（`web` / `x` / `both`）
 - `responses_web_search_calls`、`responses_x_search_calls`、`responses_tool_calls`——次数取 `usage.server_side_tool_usage_details`（计费口径）与 `output[]` 里 `*_call` item 统计的逐工具较大值；两侧都有中转会漏报，任一单独取值都会报成 0。`responses_tool_calls` 摘要为 `{ total, upstream, trace, by_action, failed? }`，两侧原始计数并列可见
-- `search_budget`——prompt 里的软预算（`prompt_total: 6`，挂 X 时 `prompt_x: 4`）与实际 `used_web` / `used_x` 并列，`enforced: false`：`max_turns` 限的是 agentic turn，一个 turn 可含多次检索，且只对 X 搜索是硬上限、web 搜索不受它约束，预算只是给模型的建议；`max_tool_calls` 官方直连与两个中转都不生效（2026-09-08 实测，直连 `max_tool_calls: 1` 仍跑 4 次）；`parallel_tool_calls: false` 官方有效、部分中转丢弃，由 `--responses-parallel-tool-calls` 显式发送
+- `search_budget`——prompt 里的软预算（`prompt_total: 6`，挂 X 时 `prompt_x: 4`）与实际次数并列，`enforced: false`。`used_web` / `used_x` 是计费调用数（含 open_page / find_in_page），`used_searches` / `used_x_searches` 只数检索，`exceeded` 按后者判断（trace 里看不到的计费调用按检索算）；按计费数判断时 199 次里有 47 次被误标超标（2026-09-14 至 10-10）。预算不是硬限制：`max_turns` 限的是 agentic turn，一个 turn 可含多次检索，且只对 X 搜索是硬上限、web 搜索不受它约束，预算只是给模型的建议；`max_tool_calls` 官方直连与两个中转都不生效（2026-09-08 实测，直连 `max_tool_calls: 1` 仍跑 4 次）；`parallel_tool_calls: false` 官方有效、部分中转丢弃，由 `--responses-parallel-tool-calls` 显式发送
 - `options.extra_domain_filter`（`pushed` / `demoted` / `none`）、`options.instructions_chars`、`options.responses_parallel_tool_calls`（设置时）
 - `responses_model`——中转实际返回的模型，与请求不同时告警
 - `degraded` 与 `grok_error`（仅额度降级）
 - `firecrawl_auth_mode: keyless | api_key`
 
-长文本在 stdout 中返回 preview，完整内容按需写入输出目录。preview 先按 `--max-chars`（字符）截，再按 `STDOUT_BUDGET_BYTES`（45KB，整个 JSON 的 UTF-8 字节）截：pi 的 bash 工具只保留最后 50KB 的整行，单行的长正文超限会连同它上面的行一起丢掉；`--full-sources` 时其余字段已超预算，不截。每次调用另写一份运行记录（`schema_version: 2`，成功 / 失败 / deadline 都写），search 通过 `sources.raw_path`、fetch / map 通过 `diagnostics.run_path` 引用；`GROK_RUN_LOG=off` 关闭。`grok_tool_calls[].source_count` 是中转挂在每个 call 上的累积值，不能做逐次归因。
+长文本在 stdout 中返回 preview，完整内容按需写入输出目录。preview 先按 `--max-chars`（字符）截，再按 `STDOUT_BUDGET_BYTES`（45KB，整个 JSON 的 UTF-8 字节）截：pi 的 bash 工具只保留最后 50KB 的整行，单行的长正文超限会连同它上面的行一起丢掉；`--full-sources` 时其余字段已超预算，不截。每次调用另写一份运行记录（`schema_version: 2`，成功 / 失败 / deadline 都写；成功时在 stdout 截断之后写，带 `printed_answer` / `printed_content`），search 通过 `sources.raw_path`、fetch / map 通过 `diagnostics.run_path` 引用；`GROK_RUN_LOG=off` 关闭。`grok_tool_calls[].source_count` 是中转挂在每个 call 上的累积值，不能做逐次归因。
 
 ## Provider 边界
 

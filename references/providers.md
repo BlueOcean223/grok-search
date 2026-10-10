@@ -46,7 +46,7 @@ When Grok returns 402, a quota error code, or a 429 whose body talks about quota
 
 Every command writes one JSON run record to the output directory (`~/.cache/grok-search/outputs/`, `GROK_OUTPUT_DIR` overrides). Search exposes it as `sources.raw_path` (always set), fetch and map as `diagnostics.run_path`. Records are also written on errors and on `DEADLINE_EXCEEDED`.
 
-Search records hold `argv` (secrets redacted), `query`, `instructions`, `options`, the full `answer`, `sources.grok` / `sources.extra` / `sources.items` (uncapped), `provider_attempts`, `grok_tool_calls`, and `diagnostics`. Fetch records hold the full content and `metadata`; map records hold `urls`. `GROK_DEBUG_RAW=1` or `--full-sources` also embeds the redacted Grok response as `grok_raw`. `GROK_RUN_LOG=off` (or `runLog: false`) disables records; `raw_path` / `run_path` become null. Files older than 30 days are cleaned up on each run.
+Search records hold `argv` (secrets redacted), `query`, `instructions`, `options`, the full `answer`, `sources.grok` / `sources.extra` / `sources.items` (uncapped), `provider_attempts`, `grok_tool_calls`, and `diagnostics`. Fetch records hold the full content and `metadata`; map records hold `urls`. Records are written after the stdout cut: their warnings match what stdout said, and `printed_answer` / `printed_content` give what stdout carried (`chars`, `truncated`, `full_path`). `GROK_DEBUG_RAW=1` or `--full-sources` also embeds the redacted Grok response as `grok_raw`. `GROK_RUN_LOG=off` (or `runLog: false`) disables records; `raw_path` / `run_path` become null. Files older than 30 days are cleaned up on each run.
 
 ## Proxy
 

@@ -241,7 +241,7 @@ OpenRouter 使用 `openrouter:web_search` server tool，不会给模型名追加
 - **命令行**的 X 过滤参数会把未显式指定的 `--source` 提升为 `both`；与显式 `--source web` 同时出现则报 `SEARCH_SOURCE_CONFLICT`。配置文件里的 X 过滤项只在 X 检索开启时生效，不会自己把档位提升上去。
 - `--responses-x-search` 保留为 `--source both` 的别名。
 - X 检索计费 $5 / 1k calls，与 web search 同价，实际次数见 `diagnostics.responses_x_search_calls`。
-- Tavily / Firecrawl extra 源只搜网页，不搜 X。`--source x` 下两家默认关闭（`diagnostics.options.extra_mode` 为 `off-x-only`，并写一条 warning），显式 `--extra N` 可开启；`--source both` 仍默认开启。
+- Tavily / Firecrawl extra 源只搜网页，不搜 X。`--source x` 下两家默认关闭（`diagnostics.options.extra_mode` 为 `off-x-only`），显式 `--extra N` 可开启；`--source both` 仍默认开启。
 - OpenRouter 会自动把 `x_search` 挂在 native web search 上，`--source` 在该路径下只是提示，未被强制执行时会写入 `diagnostics.warnings`。
 
 X citation 只返回裸 URL、且 `title` 是 inline citation 序号，因此 source card 会从 URL 还原署名：
@@ -268,7 +268,7 @@ X citation 只返回裸 URL、且 `title` 是 inline citation 序号，因此 so
 - `sources.raw_path`：总是有值（除非 `GROK_RUN_LOG=off`），指向本次调用的运行记录：脱敏 argv、query、instructions、生效 options、完整 answer、未裁剪的 source 列表、`grok_tool_calls`、diagnostics；失败与 `DEADLINE_EXCEEDED` 也会写
 - `sources.raw`，仅在使用 `--full-sources` 时出现
 - `diagnostics.responses_model`：中转实际返回的模型；与请求的不同时 `warnings` 里会有一条（2026-09-08 发现某中转对每次 `grok-4.5` 请求都返回 `grok-4.5-build`，调用次数和费用是 2–3 倍）
-- `diagnostics.grok_endpoint`、`diagnostics.usage` / `diagnostics.cost_usd`（provider 返回时）、`diagnostics.responses_*`（`responses_tool_calls` 为 `{ total, upstream: { web, x } | null, trace: { web, x }, by_action, failed? }` 摘要，失败的调用只列在 `failed`、不计入其余计数，完整列表在 `raw_path` 中）、`diagnostics.search_budget`（prompt 里的软预算与实际次数并列，`enforced: false`）、`diagnostics.warnings`、`diagnostics.provider_attempts`、`diagnostics.options`、`diagnostics.duration_ms`、`diagnostics.searched_at`
+- `diagnostics.grok_endpoint`、`diagnostics.usage` / `diagnostics.cost_usd`（provider 返回时）、`diagnostics.responses_*`（`responses_tool_calls` 为 `{ total, upstream: { web, x } | null, trace: { web, x }, by_action, failed? }` 摘要，失败的调用只列在 `failed`、不计入其余计数，完整列表在 `raw_path` 中）、`diagnostics.search_budget`（prompt 里的软预算与实际次数并列，`enforced: false`；`used_web` / `used_x` / `used_total` 是计费调用数，含打开页面，`exceeded` 只比较 `used_searches` / `used_x_searches` 这两个检索次数）、`diagnostics.warnings`、`diagnostics.provider_attempts`、`diagnostics.options`、`diagnostics.duration_ms`、`diagnostics.searched_at`
 
 默认会同时发起 Grok Responses、Tavily Search（配置 key 时）和 Firecrawl Search。三路并行，Tavily/Firecrawl 结果始终作为独立补充信源，不会注入 Grok input。
 
@@ -345,7 +345,7 @@ map 成功输出使用 `urls` 表示发现的 URL。provider、response time、i
 
 设置 `GROK_OUTPUT_DIR` 可以覆盖该路径。每次运行都会 best-effort 清理输出目录中超过 30 天的 `grok-search-*` 文件。
 
-除 preview 溢出文件外，每次调用还会写一份运行记录 `grok-search-<ts>-run-<kind>-<label>-<rand>.json`（`schema_version: 2`，权限 0600），成功、失败、`DEADLINE_EXCEEDED` 都写；`GROK_RUN_LOG=off` 或 `runLog: false` 关闭。search 记录含脱敏 argv、query、instructions、生效 options、完整 answer、未裁剪 sources、`grok_tool_calls`、diagnostics；fetch 记录含正文全文、metadata、provider_attempts；map 记录含 urls。`GROK_DEBUG_RAW=1` 或 `--full-sources` 时再附 `grok_raw`。
+除 preview 溢出文件外，每次调用还会写一份运行记录 `grok-search-<ts>-run-<kind>-<label>-<rand>.json`（`schema_version: 2`，权限 0600），成功、失败、`DEADLINE_EXCEEDED` 都写；`GROK_RUN_LOG=off` 或 `runLog: false` 关闭。search 记录含脱敏 argv、query、instructions、生效 options、完整 answer、未裁剪 sources、`grok_tool_calls`、diagnostics；fetch 记录含正文全文、metadata、provider_attempts；map 记录含 urls。记录在 stdout 截断之后才写，所以带着 agent 实际看到的 warnings，`printed_answer` / `printed_content` 记下 stdout 里正文的长度、是否截断和全文路径。`GROK_DEBUG_RAW=1` 或 `--full-sources` 时再附 `grok_raw`。
 
 只有 preview 不够时才读取这些路径：
 

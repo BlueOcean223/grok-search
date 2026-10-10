@@ -151,7 +151,7 @@ export async function fetchUrl(url, config, { provider = "auto" } = {}) {
       // available it is still better than an error; say so instead of fetching it again.
       if (directFirst.ok) {
         const failed = tried.find((attempt) => attempt.provider === "direct" && !attempt.ok);
-        const warning = `Direct 抓到的 X 页面未通过原帖校验（${failed?.error || "x_validation_failed"}），其他 provider 不可用，按原样返回；需要完整帖文或 thread 时用 --provider firecrawl。`;
+        const warning = `The X page Direct fetched failed post validation (${failed?.error || "x_validation_failed"}) and no other provider was available, so it is returned as is; use --provider firecrawl for the full post or the thread.`;
         tried.push({ provider: "direct", ok: true, skipped: false, reused: true });
         return { ...directFirst, warnings: [...(directFirst.warnings || []), warning], tried };
       }

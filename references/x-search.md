@@ -37,7 +37,7 @@ Before a second X search, name the specific gap it closes. Do not put the previo
 - Some relays return X search as its underlying tools (`x_keyword_search`, `x_semantic_search`, `x_thread_fetch`, `x_user_search`); they are counted as `x_search` and `responses_tool_calls.by_action` shows them as `keyword_search`, `thread_fetch`, and so on. Other relays return no per-call items at all, so only the billed count is known.
 - The card has no post text or date. Those live in `answer.text`, which attributes each X claim to its handle and date. Cite the handle, not a bare URL.
 - Treat posts as personal statements: attribute each to its handle and date, keep claims separate from confirmations, and do not treat repetition across accounts as corroboration. When an official source exists, confirm the fact there and use X for reaction, timing, or first-hand experience.
-- Tavily and Firecrawl extras never search X, so on `--source x` they are off by default (`diagnostics.options.extra_mode: "off-x-only"`, with a warning). In the 2026-09-08 side-by-side all six of their results for an X question were unrelated web pages. `--extra N` forces them on; `--source both` keeps them on.
+- Tavily and Firecrawl extras never search X, so on `--source x` they are off by default (`diagnostics.options.extra_mode: "off-x-only"`). In the 2026-09-08 side-by-side all six of their results for an X question were unrelated web pages. `--extra N` forces them on; `--source both` keeps them on.
 
 ## Fetching A Post
 

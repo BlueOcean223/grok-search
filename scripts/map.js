@@ -134,7 +134,7 @@ function parseArgs(argv) {
   return { ...out, url: parsed.toString() };
 }
 
-function publicResult(args, result) {
+function publicResult(args, result, durationMs) {
   const ok = Boolean(result.ok);
   const mappedAt = new Date().toISOString();
   const diagnostics = {
@@ -153,6 +153,7 @@ function publicResult(args, result) {
       requestTimeout: args.directTimeout,
       direct_timeout: args.directTimeout,
     },
+    duration_ms: durationMs,
     mapped_at: mappedAt,
   };
 
@@ -229,8 +230,9 @@ try {
     process.exit(1);
   });
   try {
+    const startedAtMs = Date.now();
     const result = await mapUrl(args.url, config, args);
-    const output = publicResult(args, result);
+    const output = publicResult(args, result, Date.now() - startedAtMs);
     const runPath = await writeRunRecord(config, { kind: "map", label: args.url, record: runRecord(config, args, output) });
     if (runPath) output.diagnostics.run_path = runPath;
     printJson(output);

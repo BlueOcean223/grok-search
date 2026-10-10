@@ -117,14 +117,27 @@ function runLogEnabled(config) {
 }
 
 /**
+ * Where a run record will be written, or null when records are off. Taking the path first
+ * lets stdout name the record while the record is written last, after the stdout cut, so it
+ * holds the warnings and file paths the agent actually got.
+ */
+export function runRecordPath(config, { kind, label }) {
+  return runLogEnabled(config) ? outputPath(config, { kind: "run", provider: kind, label, extension: "json" }) : null;
+}
+
+/**
  * One JSON file per command so a run can be replayed later: query, resolved options, the
  * full answer, every source, usage, tool calls and errors. Cheap to keep (a few KB, swept by
  * the 30-day retention) and the only durable trace of what a search cost and returned.
+ * `at` is a path from runRecordPath; without it a new path is chosen.
  */
-export async function writeRunRecord(config, { kind, label, record }) {
+export async function writeRunRecord(config, { kind, label, record, at = null }) {
   if (!runLogEnabled(config)) return null;
   try {
-    return await writeJsonOutput(config, { kind: "run", provider: kind, label, value: record });
+    if (!at) return await writeJsonOutput(config, { kind: "run", provider: kind, label, value: record });
+    await mkdir(path.dirname(at), { recursive: true, mode: 0o700 });
+    await writeFile(at, JSON.stringify(record, jsonReplacer, 2), { encoding: "utf8", mode: 0o600 });
+    return at;
   } catch (error) {
     debug(config, `run record skipped: ${error.message}`);
     return null;

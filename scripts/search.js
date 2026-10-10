@@ -17,6 +17,7 @@ import {
   previewText,
   printJson,
   runRecordBase,
+  runRecordPath,
   STDOUT_BUDGET_BYTES,
   writeFullOutput,
   writeRunRecord,
@@ -471,11 +472,6 @@ function resolveExtra(args, config, searchSource) {
   return { limit: config.defaultExtra, mode: "auto" };
 }
 
-function extraModeWarnings(extraOptions) {
-  if (extraOptions.mode !== "off-x-only") return [];
-  return ["extra sources skipped: --source x searches X only and Tavily/Firecrawl search the web; pass --extra N to include them."];
-}
-
 function dedupeFilterValues(values) {
   const byKey = new Map();
   for (const value of values) {
@@ -733,22 +729,39 @@ function summarizeToolCalls(toolCalls, total, counts) {
   };
 }
 
+// Calls that read a page rather than search. The prompt budgets searches and expects pages to
+// be opened besides ("one focused search and one authoritative page").
+const PAGE_ACTIONS = new Set(["open_page", "find_in_page", "thread_fetch"]);
+
 /**
  * The prompts ask for about SEARCH_BUDGET_TOTAL searches (SEARCH_BUDGET_X of them on X).
  * That is advice, not a cap: max_turns bounds agentic turns and a turn can hold several
  * calls, so `enforced` stays false until a provider-side limit is wired in.
+ *
+ * `used_*` are billed calls, page reads included. `used_searches` / `used_x_searches` count
+ * searches only, and `exceeded` compares those with the budget; billed calls the trace does
+ * not show count as searches, since nothing says what they were. Counting page reads had
+ * marked 47 of 199 runs (2026-09-14 to 10-10) as over budget when their searches were not.
  */
-function searchBudget(searchSource, diagnostics) {
+function searchBudget(searchSource, diagnostics, toolCalls) {
   const usedWeb = diagnostics.responses_web_search_calls ?? 0;
   const usedX = diagnostics.responses_x_search_calls ?? 0;
   const promptX = usesXSearch(searchSource) ? SEARCH_BUDGET_X : 0;
+  const completed = toolCalls.filter((call) => !call.status || call.status === "completed");
+  const isX = (call) => String(call.tool || "").includes("x_search");
+  const searchesIn = (calls, billed) =>
+    calls.filter((call) => !PAGE_ACTIONS.has(call.action_type)).length + Math.max(0, billed - calls.length);
+  const xSearches = searchesIn(completed.filter(isX), usedX);
+  const searches = searchesIn(completed.filter((call) => !isX(call)), usedWeb) + xSearches;
   return {
     prompt_total: SEARCH_BUDGET_TOTAL,
     prompt_x: promptX,
     used_web: usedWeb,
     used_x: usedX,
     used_total: usedWeb + usedX,
-    exceeded: usedWeb + usedX > SEARCH_BUDGET_TOTAL || usedX > promptX,
+    used_searches: searches,
+    used_x_searches: xSearches,
+    exceeded: searches > SEARCH_BUDGET_TOTAL || xSearches > promptX,
     enforced: false,
   };
 }
@@ -785,7 +798,7 @@ async function grokChannel(args, config, searchOptions) {
   delete diagnostics.responses_tool_call_total;
   delete diagnostics.responses_tool_call_counts;
   diagnostics.responses_tool_calls = summarizeToolCalls(toolCalls, toolCallTotal, toolCallCounts);
-  diagnostics.search_budget = searchBudget(searchOptions.searchSource, diagnostics);
+  diagnostics.search_budget = searchBudget(searchOptions.searchSource, diagnostics, toolCalls);
   if (!grok.sources.length) warnings.push("No responses citations or searched sources were found.");
   return {
     endpoint: grok.endpoint,
@@ -794,7 +807,7 @@ async function grokChannel(args, config, searchOptions) {
     sources: grok.sources,
     tool_calls: toolCalls,
     warnings,
-    provider_attempts: [{ provider: `grok-responses:${config.apiProvider}`, ok: true, count: grok.sources.length }],
+    provider_attempts: [{ provider: `grok-responses:${config.apiProvider}`, ok: true, count: grok.sources.length, requests: grok.requests }],
     diagnostics,
     raw_content_chars: grok.content.length,
     raw: grok.raw,
@@ -816,7 +829,13 @@ function classifyGrokFailure(error) {
 }
 
 function grokFailureAttempt(config, error) {
-  return { provider: `grok-responses:${config.apiProvider}`, ok: false, count: 0, error: error.message };
+  return {
+    provider: `grok-responses:${config.apiProvider}`,
+    ok: false,
+    count: 0,
+    error: error.message,
+    ...(error.requests == null ? {} : { requests: error.requests }),
+  };
 }
 
 function clipText(value, max = 800) {
@@ -920,7 +939,7 @@ async function publicResult(args, config) {
       sources: [],
       tool_calls: [],
       warnings: [
-        `Grok Responses 因${labels.label}不可用；当前 answer 仅包含 Tavily/Firecrawl 原始搜索结果，未经 Grok 综合生成。`,
+        `${labels.warning} answer.text lists the raw Tavily/Firecrawl results; Grok did not write it.`,
       ],
       provider_attempts: [grokFailureAttempt(config, grokResult.error)],
       diagnostics: {},
@@ -928,7 +947,7 @@ async function publicResult(args, config) {
     };
   }
 
-  const warnings = [...searchSourceWarnings(searchOptions, config), ...extraModeWarnings(extraOptions), ...grok.warnings, ...extra.warnings];
+  const warnings = [...searchSourceWarnings(searchOptions, config), ...grok.warnings, ...extra.warnings];
   const providerAttempts = [...grok.provider_attempts, ...extra.provider_attempts];
   const rawGrokSources = grok.sources;
   const rawExtraSources = extra.sources;
@@ -988,34 +1007,9 @@ async function publicResult(args, config) {
   };
 
   // The run record is the durable copy of this call: full answer, every source (not just the
-  // 12 shown), provider raw payloads, tool calls, usage. stdout only carries its path.
-  const runPath = await writeRunRecord(config, {
-    kind: "search",
-    label: args.query,
-    record: {
-      ...runRecordBase("search", config, createdAt),
-      query: args.query,
-      instructions: args.instructions || null,
-      platform: args.platform || null,
-      model: grok.model,
-      options: diagnostics.options,
-      answer: grok.answer,
-      sources: {
-        grok: rawGrokSources,
-        extra: rawExtraSources,
-        items: mergedCompactFull,
-        returned: selected.returned,
-        total: selected.total,
-        omitted: selected.omitted,
-      },
-      provider_raw: rawPayload.provider_raw,
-      provider_attempts: providerAttempts,
-      grok_tool_calls: grok.tool_calls,
-      diagnostics,
-      error: null,
-      ...(config.debugRaw || args.fullSources ? { grok_raw: grok.raw ?? null } : {}),
-    },
-  });
+  // 12 shown), provider raw payloads, tool calls, usage. stdout only carries its path. It is
+  // written last, so it also holds what the stdout cut changed.
+  const runPath = runRecordPath(config, { kind: "search", label: args.query });
   const sources = {
     items: itemsCompact,
     returned: selected.returned,
@@ -1051,10 +1045,40 @@ async function publicResult(args, config) {
     });
     output.answer.truncated = true;
     warnings.push(
-      `answer.text 只保留开头，让整个输出不超过 ${STDOUT_BUDGET_BYTES / 1024}KB（agent 的 shell 工具会截掉更长的输出）；全文在 answer.full_path，分段读。`
+      `answer.text keeps only the beginning so the whole output stays under ${STDOUT_BUDGET_BYTES / 1024}KB (agent shell tools cut longer output); the full text is in answer.full_path, read it in chunks.`
     );
   });
   if (cut) output.answer.chars = output.answer.text.length;
+
+  const written = await writeRunRecord(config, {
+    at: runPath,
+    record: {
+      ...runRecordBase("search", config, createdAt),
+      query: args.query,
+      instructions: args.instructions || null,
+      platform: args.platform || null,
+      model: grok.model,
+      options: diagnostics.options,
+      answer: grok.answer,
+      // What stdout carried of the answer: its length and, when cut, where the full text went.
+      printed_answer: { chars: output.answer.chars, truncated: output.answer.truncated, full_path: output.answer.full_path },
+      sources: {
+        grok: rawGrokSources,
+        extra: rawExtraSources,
+        items: mergedCompactFull,
+        returned: selected.returned,
+        total: selected.total,
+        omitted: selected.omitted,
+      },
+      provider_raw: rawPayload.provider_raw,
+      provider_attempts: providerAttempts,
+      grok_tool_calls: grok.tool_calls,
+      diagnostics,
+      error: null,
+      ...(config.debugRaw || args.fullSources ? { grok_raw: grok.raw ?? null } : {}),
+    },
+  });
+  if (!written) sources.raw_path = null;
   return output;
 }
 

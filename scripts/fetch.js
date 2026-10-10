@@ -7,6 +7,7 @@ import {
   previewText,
   printJson,
   runRecordBase,
+  runRecordPath,
   STDOUT_BUDGET_BYTES,
   writeFullOutput,
   writeRunRecord,
@@ -122,7 +123,7 @@ function landedOnSiteRoot(requestedUrl, finalUrl) {
   }
 }
 
-async function publicResult(args, result, config) {
+async function publicResult(args, result, config, durationMs) {
   const ok = Boolean(result.ok);
   const warnings = [...(result.warnings || [])];
   if (ok && result.redirected && landedOnSiteRoot(args.url, result.final_url)) {
@@ -130,7 +131,7 @@ async function publicResult(args, result, config) {
   }
   if (Number.isFinite(result.credits_used) && result.credits_used >= HIGH_CREDITS_THRESHOLD) {
     warnings.push(
-      `Firecrawl 本次消耗 ${result.credits_used} credits（普通页面 1 credit）；keyless 免费档几次这样的抓取就会耗尽当日额度，X 原帖优先考虑 Direct。`
+      `Firecrawl used ${result.credits_used} credits on this page (an ordinary page costs 1); a few such fetches use up the keyless tier's daily allowance. For X posts prefer Direct.`
     );
   }
   const fetchedAt = new Date().toISOString();
@@ -143,6 +144,7 @@ async function publicResult(args, result, config) {
       provider: args.provider,
       max_chars: args.maxChars,
     },
+    duration_ms: durationMs,
     fetched_at: fetchedAt,
   };
 
@@ -199,7 +201,7 @@ async function fitContentToStdout(config, output, result) {
     });
     content.truncated = true;
     output.diagnostics.warnings.push(
-      `content.text 只保留开头，让整个输出不超过 ${STDOUT_BUDGET_BYTES / 1024}KB（agent 的 shell 工具会截掉更长的输出）；全文在 content.full_path，分段读。`
+      `content.text keeps only the beginning so the whole output stays under ${STDOUT_BUDGET_BYTES / 1024}KB (agent shell tools cut longer output); the full text is in content.full_path, read it in chunks.`
     );
   });
   if (cut) content.chars = content.text.length;
@@ -230,6 +232,10 @@ function runRecord(config, args, output, result) {
     provider: output.diagnostics.provider ?? null,
     metadata: output.metadata ?? {},
     content: result?.ok ? result.content || "" : null,
+    // What stdout carried of it: the preview length and, when cut, where the full text went.
+    printed_content: output.content
+      ? { chars: output.content.chars, truncated: output.content.truncated, full_path: output.content.full_path }
+      : null,
     provider_attempts: output.diagnostics.provider_attempts,
     warnings: output.diagnostics.warnings,
     diagnostics: output.diagnostics,
@@ -263,15 +269,15 @@ try {
     process.exit(1);
   });
   try {
+    const startedAtMs = Date.now();
     const result = await fetchUrl(args.url, config, { provider: args.provider });
-    const output = await publicResult(args, result, config);
-    const runPath = await writeRunRecord(config, {
-      kind: "fetch",
-      label: result.final_url || args.url,
-      record: runRecord(config, args, output, result),
-    });
+    const output = await publicResult(args, result, config, Date.now() - startedAtMs);
+    const runPath = runRecordPath(config, { kind: "fetch", label: result.final_url || args.url });
     if (runPath) output.diagnostics.run_path = runPath;
     if (output.content) await fitContentToStdout(config, output, result);
+    if (!(await writeRunRecord(config, { at: runPath, record: runRecord(config, args, output, result) }))) {
+      delete output.diagnostics.run_path;
+    }
 
     printJson(output);
     if (output.error) {

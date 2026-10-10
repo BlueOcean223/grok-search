@@ -616,3 +616,33 @@ assert.equal(missing.sources.length, 0);
 assert.equal(missing.diagnostics.warnings.length >= 1, true);
 
 console.log("responses fixtures ok");
+
+// xAI's citation render markup leaked into two answers on record (2026-09-17, 10-08). It is
+// stripped; the text and links around it stay, and the links still count as citations.
+const leaked = parseGrokResponses({
+  output: [
+    {
+      type: "message",
+      content: [
+        {
+          type: "output_text",
+          text:
+            'Logs go to stdout ([Logging](https://devcenter.heroku.com/articles/logging)) show render_inline_citation with citation_id="2"\n\n' +
+            '| [@skim71](https://x.com/skim71) | Links the blog \ue200render_inline_citation speecheo_citation_id="19"\ue201 |\n' +
+            'None linked it. \ue200render_inline_citation speecheo_citation_id="13"\ue201 \ue200render_inline_citation speecheo_citation_id="15"\ue201',
+        },
+      ],
+    },
+  ],
+});
+assert.equal(
+  leaked.text,
+  "Logs go to stdout ([Logging](https://devcenter.heroku.com/articles/logging))\n\n| [@skim71](https://x.com/skim71) | Links the blog |\nNone linked it."
+);
+assert.deepEqual(
+  leaked.sources.map((source) => [source.url, source.source_type]),
+  [
+    ["https://devcenter.heroku.com/articles/logging", "citation"],
+    ["https://x.com/skim71", "citation"],
+  ]
+);

@@ -155,6 +155,11 @@ await withServer(
     assert.equal(output.content.chars, 12_000);
     assert.equal(output.content.truncated, true);
     assert.equal((await readFile(output.content.full_path, "utf8")).length, 13_000);
+    assert.equal(typeof output.diagnostics.duration_ms, "number");
+    // The run record keeps the full text and says what stdout carried of it.
+    const record = JSON.parse(await readFile(output.diagnostics.run_path, "utf8"));
+    assert.equal(record.content.length, 13_000);
+    assert.deepEqual(record.printed_content, { chars: 12_000, truncated: true, full_path: output.content.full_path });
 
     const explicitFetch = await runNode([
       "scripts/fetch.js",
@@ -227,7 +232,7 @@ await withServer(
     assert.equal(output.diagnostics.options.responses_max_turns, 3);
     assert.equal(Object.hasOwn(output.diagnostics.options, "search_mode"), false);
     assert.equal(output.diagnostics.options.extra_mode, "off");
-    assert.deepEqual(output.diagnostics.provider_attempts, [{ provider: "grok-responses:xai", ok: true, count: 1 }]);
+    assert.deepEqual(output.diagnostics.provider_attempts, [{ provider: "grok-responses:xai", ok: true, count: 1, requests: 1 }]);
     assert.equal(output.diagnostics.cost_usd, 0.000015);
     assert.equal(output.sources.items.length, 1);
     assert.equal(output.sources.total, 1);
@@ -246,6 +251,8 @@ await withServer(
       used_web: 1,
       used_x: 0,
       used_total: 1,
+      used_searches: 1,
+      used_x_searches: 0,
       exceeded: false,
       enforced: false,
     });
@@ -349,10 +356,61 @@ await withServer(
     assert.equal(output.diagnostics.options.extra_mode, "off-x-only");
     assert.deepEqual(output.diagnostics.options.extra_allocation, { tavily: 0, firecrawl: 0 });
     assert.deepEqual(output.diagnostics.provider_attempts.map((attempt) => attempt.provider), ["grok-responses:xai"]);
-    assert.equal(output.diagnostics.warnings.some((warning) => /--source x searches X only/.test(warning)), true);
+    // extra_mode says it; a warning on every X-only search was never acted on (9 of 9 on record).
+    assert.deepEqual(output.diagnostics.warnings, []);
     // --source both still runs extras by default, so nothing changes for the routed mode.
     const both = await runNode(["scripts/search.js", "--source", "both", "--no-extra", "mock query"], env);
     assert.equal(parseJson(both.stdout).diagnostics.options.extra_mode, "off");
+  }
+);
+
+// The prompt budgets searches and expects pages to be opened besides. Three searches and five
+// page reads are eight billed calls but within the budget of six searches.
+await withServer(
+  (req, res) => {
+    readJson(req, () => {
+      const payload = responsesPayload();
+      for (const query of ["b", "c"]) payload.output.push({ type: "web_search_call", status: "completed", action: { type: "search", query } });
+      for (let page = 0; page < 5; page += 1) {
+        payload.output.push({ type: "web_search_call", status: "completed", action: { type: "open_page", url: `https://official.example/p${page}` } });
+      }
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(payload));
+    });
+  },
+  async (_server, port) => {
+    const output = parseJson((await runNode(["scripts/search.js", "--no-extra", "mock query"], baseGrokEnv(port))).stdout);
+    assert.equal(output.diagnostics.search_budget.used_total, 8);
+    assert.equal(output.diagnostics.search_budget.used_searches, 3);
+    assert.equal(output.diagnostics.search_budget.exceeded, false);
+  }
+);
+
+// A retried Grok request is counted, and the run record, written after the stdout cut, says
+// what stdout carried of the answer.
+let grokRequests = 0;
+await withServer(
+  (req, res) => {
+    readJson(req, () => {
+      grokRequests += 1;
+      if (grokRequests === 1) {
+        res.writeHead(503, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: { message: "upstream busy" } }));
+        return;
+      }
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(responsesPayload("A".repeat(60_000))));
+    });
+  },
+  async (_server, port) => {
+    const env = baseGrokEnv(port, { GROK_RETRY_MULTIPLIER: "0" });
+    const output = parseJson((await runNode(["scripts/search.js", "--no-extra", "--max-chars", "60000", "mock query"], env)).stdout);
+    assert.equal(output.diagnostics.provider_attempts[0].requests, 2);
+    assert.equal(output.answer.truncated, true);
+    const record = JSON.parse(await readFile(output.sources.raw_path, "utf8"));
+    assert.equal(record.answer.length, 60_000);
+    assert.deepEqual(record.printed_answer, { chars: output.answer.chars, truncated: true, full_path: output.answer.full_path });
+    assert.match(record.diagnostics.warnings.join("\n"), /answer\.text keeps only the beginning/);
   }
 );
 
@@ -493,6 +551,8 @@ await withServer(
     });
     assert.equal(output.diagnostics.search_budget.prompt_x, 4);
     assert.equal(output.diagnostics.search_budget.used_x, 8);
+    // Billed calls the trace does not show count as searches.
+    assert.equal(output.diagnostics.search_budget.used_x_searches, 8);
     assert.equal(output.diagnostics.search_budget.exceeded, true);
     assert.deepEqual(output.sources.items, [
       {
@@ -1202,6 +1262,25 @@ await withServer(
     assert.match(record.content, /Direct content/);
     assert.equal(record.provider_attempts.length, 3);
     assert.equal(record.error, null);
+  }
+);
+
+// A fetch cut to the stdout budget: the record, written after the cut, carries the warning
+// and the file the full text went to.
+await withServer(
+  (req, res) => {
+    req.resume();
+    res.writeHead(200, { "content-type": "text/plain" });
+    res.end("y".repeat(60_000));
+  },
+  async (_server, port) => {
+    const output = parseJson((await runNode(["scripts/fetch.js", "--provider", "direct", "--max-chars", "100000", `http://127.0.0.1:${port}/big`])).stdout);
+    assert.equal(output.content.truncated, true);
+    assert.ok(output.content.chars < 60_000);
+    const record = JSON.parse(await readFile(output.diagnostics.run_path, "utf8"));
+    assert.equal(record.content.length, 60_000);
+    assert.deepEqual(record.printed_content, { chars: output.content.chars, truncated: true, full_path: output.content.full_path });
+    assert.match(record.warnings.join("\n"), /content\.text keeps only the beginning/);
   }
 );
 

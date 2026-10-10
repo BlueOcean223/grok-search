@@ -173,9 +173,20 @@ function isSourceListing(annotation) {
   return !title || title === urlFromObject(annotation);
 }
 
+// xAI's markup for rendering a citation sometimes leaks into the answer text, either between
+// private-use delimiters ("\ue200render_inline_citation speecheo_citation_id="10"\ue201",
+// grok-4.6, 2026-10-08) or bare after a link (` show render_inline_citation with
+// citation_id="2"`, grok-4.6-build, 2026-09-17). Neither carries anything for a reader.
+const RENDER_MARKUP =
+  /[ \t]*(?:\ue200[^\ue200\ue201]*\ue201|\bshow render_inline_citation with citation_id="\d+"|\brender_inline_citation (?:\w+_)?citation_id="\d+")/g;
+
+function stripRenderMarkup(text) {
+  return text.replace(RENDER_MARKUP, "").trim();
+}
+
 function extractResponsesText(data) {
   const directText = textField(data?.output_text);
-  if (directText) return directText;
+  if (directText) return stripRenderMarkup(directText);
 
   const messages = [];
   for (const item of outputItems(data)) {
@@ -204,7 +215,7 @@ function extractResponsesText(data) {
     }
   }
 
-  return texts.join("\n\n").trim();
+  return stripRenderMarkup(texts.join("\n\n"));
 }
 
 function collectAnnotations(value, out = []) {
@@ -583,14 +594,23 @@ export function parseGrokResponses(data, { defaultTool = "web_search", xEnabled 
 export async function searchGrokResponses(query, options, config) {
   const endpoint = responsesEndpoint(config);
   const body = buildResponsesBody(query, options, config);
-  const data = await requestJson(endpoint, {
-    headers: authHeaders(config.grokApiKey),
-    body,
-    timeoutMs: 180_000,
-    config,
-    retry: true,
-    retryOnTimeout: false,
-  });
+  // Retries are otherwise invisible in the output; count the requests that went out.
+  const stats = { requests: 0 };
+  let data;
+  try {
+    data = await requestJson(endpoint, {
+      headers: authHeaders(config.grokApiKey),
+      body,
+      timeoutMs: 180_000,
+      config,
+      retry: true,
+      retryOnTimeout: false,
+      stats,
+    });
+  } catch (error) {
+    error.requests = stats.requests;
+    throw error;
+  }
 
   const defaultTool =
     config.apiProvider === "openrouter" ? "openrouter:web_search" : options.searchSource === "x" ? "x_search" : "web_search";
@@ -601,6 +621,7 @@ export async function searchGrokResponses(query, options, config) {
     const error = new Error("Grok Responses 返回空内容");
     error.code = "GROK_RESPONSES_EMPTY";
     error.diagnostics = parsed.diagnostics;
+    error.requests = stats.requests;
     throw error;
   }
 
@@ -610,6 +631,7 @@ export async function searchGrokResponses(query, options, config) {
     sources: parsed.sources,
     endpoint: "responses",
     diagnostics: parsed.diagnostics,
+    requests: stats.requests,
     raw: data,
   };
 }

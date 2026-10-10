@@ -248,7 +248,7 @@ On success, provider attempts, warnings, timestamps, and command options live un
 - A **command-line** X filter promotes an unspecified `--source` to `both`; combining one with an explicit `--source web` raises `SEARCH_SOURCE_CONFLICT`. X filters in the config file only apply once X search is on — they never switch it on by themselves.
 - `--responses-x-search` remains an alias for `--source both`.
 - X search is billed at $5 per 1k calls, the same rate as web search. See `diagnostics.responses_x_search_calls` for the actual count.
-- Tavily and Firecrawl extras only search the web, never X. On `--source x` they are off by default (`diagnostics.options.extra_mode` is `off-x-only` and a warning says so); `--extra N` turns them on, and `--source both` keeps them on.
+- Tavily and Firecrawl extras only search the web, never X. On `--source x` they are off by default (`diagnostics.options.extra_mode` is `off-x-only`); `--extra N` turns them on, and `--source both` keeps them on.
 - OpenRouter attaches `x_search` to native web search automatically, so `--source` is only a hint there; whatever is not enforced is reported in `diagnostics.warnings`.
 
 X citations arrive as bare URLs whose `title` is only the inline citation marker, so source cards recover attribution from the URL:
@@ -275,7 +275,7 @@ Post text and dates are not in the card; `answer.text` attributes each X claim b
 - `sources.raw_path`: always set (unless `GROK_RUN_LOG=off`), pointing at the run record for this call: redacted argv, query, instructions, effective options, the full answer, the uncapped source lists, `grok_tool_calls`, and diagnostics. Errors and `DEADLINE_EXCEEDED` write one too
 - `sources.raw` only when `--full-sources` is used
 - `diagnostics.responses_model`: the model the relay actually served; a warning is added when it differs from the requested one (on 2026-09-08 one relay answered every `grok-4.5` request with `grok-4.5-build`, at two to three times the tool calls and cost)
-- `diagnostics.grok_endpoint`, `diagnostics.usage` / `diagnostics.cost_usd` when supplied by the provider, `diagnostics.responses_*` (`responses_tool_calls` is a `{ total, upstream: { web, x } | null, trace: { web, x }, by_action, failed? }` summary; failed calls appear only under `failed` and are left out of the other counts; the full list lives in `raw_path`), `diagnostics.search_budget` (the prompt's advisory budget next to the calls actually made, `enforced: false`), `diagnostics.warnings`, `diagnostics.provider_attempts`, `diagnostics.options`, `diagnostics.duration_ms`, and `diagnostics.searched_at`
+- `diagnostics.grok_endpoint`, `diagnostics.usage` / `diagnostics.cost_usd` when supplied by the provider, `diagnostics.responses_*` (`responses_tool_calls` is a `{ total, upstream: { web, x } | null, trace: { web, x }, by_action, failed? }` summary; failed calls appear only under `failed` and are left out of the other counts; the full list lives in `raw_path`), `diagnostics.search_budget` (the prompt's advisory budget next to the calls actually made, `enforced: false`; `used_web` / `used_x` / `used_total` are billed calls including page reads, while `exceeded` compares only the searches, `used_searches` / `used_x_searches`), `diagnostics.warnings`, `diagnostics.provider_attempts`, `diagnostics.options`, `diagnostics.duration_ms`, and `diagnostics.searched_at`
 
 By default the command starts Grok Responses, Tavily Search when configured, and Firecrawl Search in parallel. Tavily and Firecrawl remain independent evidence channels and are never injected into Grok input.
 
@@ -352,7 +352,7 @@ All scripts keep stdout as complete JSON. Long text fields are returned as previ
 
 Set `GROK_OUTPUT_DIR` to override this path. Each run performs best-effort cleanup of `grok-search-*` files older than 30 days inside the output directory.
 
-Besides overflow files, every command writes one run record `grok-search-<ts>-run-<kind>-<label>-<rand>.json` (`schema_version: 2`, mode 0600) on success, error, and `DEADLINE_EXCEEDED`; `GROK_RUN_LOG=off` or `runLog: false` disables it. Search records hold redacted argv, query, instructions, effective options, the full answer, uncapped sources, `grok_tool_calls`, and diagnostics; fetch records hold the full content, metadata, and provider attempts; map records hold urls. `GROK_DEBUG_RAW=1` or `--full-sources` adds `grok_raw`.
+Besides overflow files, every command writes one run record `grok-search-<ts>-run-<kind>-<label>-<rand>.json` (`schema_version: 2`, mode 0600) on success, error, and `DEADLINE_EXCEEDED`; `GROK_RUN_LOG=off` or `runLog: false` disables it. Search records hold redacted argv, query, instructions, effective options, the full answer, uncapped sources, `grok_tool_calls`, and diagnostics; fetch records hold the full content, metadata, and provider attempts; map records hold urls. A record is written after the stdout cut, so it holds the warnings the agent got, and `printed_answer` / `printed_content` give the length stdout carried, whether it was cut, and where the full text went. `GROK_DEBUG_RAW=1` or `--full-sources` adds `grok_raw`.
 
 Read these paths only when the preview is not enough:
 
