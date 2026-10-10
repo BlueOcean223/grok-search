@@ -1,6 +1,6 @@
 import { authHeaders, requestJson } from "./http.js";
 import { mapScope, scopePattern } from "./map-scope.js";
-import { domainFilters } from "./sources.js";
+import { domainFilters, sourceCard } from "./sources.js";
 
 export async function tavilyExtract(url, config) {
   if (!config.tavilyApiKey) {
@@ -36,16 +36,13 @@ export async function tavilyExtract(url, config) {
 }
 
 function sourceFromTavily(result) {
-  const url = typeof result?.url === "string" ? result.url.trim() : "";
-  if (!url) return null;
-  return {
-    url,
+  return sourceCard(result?.url, {
     provider: "tavily",
-    ...(result.title ? { title: String(result.title).trim() } : {}),
-    ...(result.content ? { description: String(result.content).trim() } : {}),
-    ...(result.published_date ? { published_date: String(result.published_date).trim() } : {}),
-    ...(Number.isFinite(result.score) ? { score: result.score } : {}),
-  };
+    title: result?.title,
+    snippet: result?.content,
+    published_date: result?.published_date,
+    score: result?.score,
+  });
 }
 
 export async function tavilySearch(query, limit, config, filters = {}) {

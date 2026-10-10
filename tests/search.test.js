@@ -97,14 +97,14 @@ const grokFromFixture = (body) => async (query, options, cfg) => grokSearchResul
 const tavilyOk = async (query, limit) => ({
   ok: true,
   provider: "tavily",
-  sources: [{ url: "https://nodejs.org/en/download", provider: "tavily", title: "Download Node.js", description: "Current and LTS downloads." }].slice(0, limit),
+  sources: [{ url: "https://nodejs.org/en/download", provider: "tavily", title: "Download Node.js", snippet: "Current and LTS downloads." }].slice(0, limit),
   raw: { results: 1 },
 });
 const firecrawlOk = async (query, limit) => ({
   ok: true,
   provider: "firecrawl",
   auth_mode: "keyless",
-  sources: [{ url: "https://github.com/nodejs/node/releases", provider: "firecrawl", title: "Releases · nodejs/node", description: "Release list." }].slice(0, limit),
+  sources: [{ url: "https://github.com/nodejs/node/releases", provider: "firecrawl", title: "Releases · nodejs/node", snippet: "Release list." }].slice(0, limit),
   raw: {},
 });
 

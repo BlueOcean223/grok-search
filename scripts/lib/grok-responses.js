@@ -2,16 +2,12 @@ import { authHeaders, requestJson } from "./http.js";
 import { usesWebSearch, usesXSearch } from "./config.js";
 import { getLocalTimeContext, platformPrompt } from "./context.js";
 import { ANSWER_MARKER_PATTERN, SEARCH_BUDGET_TOTAL, SEARCH_BUDGET_X, searchPrompt, xSearchPrompt } from "./prompts.js";
-import { isCitationMarker, isXUrl, normalizeSourceUrl, parseXPostUrl } from "./sources.js";
+import { isXUrl, sourceCard, sourceKey, textField, usableTitle } from "./sources.js";
 import { numericField, usageDiagnostics } from "./usage.js";
 
 function asArray(value) {
   if (Array.isArray(value)) return value;
   return value == null ? [] : [value];
-}
-
-function textField(value) {
-  return typeof value === "string" && value.trim() ? value.trim() : "";
 }
 
 function isPlainObject(value) {
@@ -293,38 +289,16 @@ function snippetFromObject(value) {
   );
 }
 
-/**
- * X citations arrive as a bare URL whose title is only the inline citation marker
- * ("1", "2", ...). Recover the handle from the URL and drop the marker so the card
- * carries attribution instead of a meaningless number.
- */
-function xSourceFields(url, title) {
-  const post = parseXPostUrl(url);
-  if (!post) return null;
-  const isMarker = !title || isCitationMarker(title);
-  if (!isMarker) return { ...post, title };
-  return { ...post, ...(post.x_handle ? { title: `@${post.x_handle}` } : {}) };
-}
-
 function sourceFromValue(value, { sourceType, tool }) {
   const url = urlFromObject(value);
   if (!url) return null;
-  const normalizedUrl = normalizeSourceUrl(url);
-  // Some relays fill the citation title with the URL itself; that is no more a title than "1".
-  const rawTitle = titleFromObject(value);
-  const title = rawTitle && (rawTitle.trim() === url.trim() || rawTitle.trim() === normalizedUrl) ? "" : rawTitle;
-  const xFields = xSourceFields(normalizedUrl, title);
-
-  return {
+  return sourceCard(url, {
     provider: "grok-responses",
     source_type: sourceType,
     tool,
-    url: normalizedUrl,
-    // A marker ("1") is the footnote number, not a title. Keep it out of the card; the
-    // dedupe pass fills in a real title from the search listing when one exists.
-    ...(xFields ? xFields : usableTitle(title) ? { title } : {}),
-    ...(snippetFromObject(value) ? { snippet: snippetFromObject(value) } : {}),
-  };
+    title: titleFromObject(value),
+    snippet: snippetFromObject(value),
+  });
 }
 
 function citationTool(value, defaultTool, xEnabled) {
@@ -388,7 +362,7 @@ function isSearchToolCall(item) {
 function extractSearchedSources(data, defaultTool) {
   const sources = [];
   const toolCalls = [];
-  // URLs Grok actually opened (action.type "open_page"), keyed by normalized URL.
+  // URLs Grok actually opened (action.type "open_page"), keyed by sourceKey.
   const openedUrls = new Map();
   let webSearchCalls = 0;
   let xSearchCalls = 0;
@@ -414,7 +388,7 @@ function extractSearchedSources(data, defaultTool) {
     const actionUrl = textField(item?.action?.url) || textField(customInput.url);
     const actionQuery = textField(item?.action?.query) || textField(customInput.query);
     if (!failed && actionType === "open_page" && /^https?:\/\//i.test(actionUrl)) {
-      const key = normalizeSourceUrl(actionUrl);
+      const key = sourceKey(actionUrl);
       if (!openedUrls.has(key)) openedUrls.set(key, tool);
     }
 
@@ -495,23 +469,20 @@ function extractTextLinkSources(text, defaultTool, xEnabled) {
   return sources;
 }
 
-function usableTitle(title) {
-  return Boolean(textField(title)) && !isCitationMarker(title);
-}
-
 /**
- * One card per URL. The citation identity wins, but a marker title ("1") is a placeholder,
- * not a title, so a real one from the search listing replaces it.
+ * One card per page (sourceKey: one per X post whatever the URL form). The citation identity
+ * wins, but a marker title ("1") is a placeholder, not a title, so a real one from the search
+ * listing replaces it, and an X handle only the other URL form named is kept.
  */
 function dedupeResponsesSources(citationSources, searchedSources) {
   const out = [];
-  const indexByUrl = new Map();
+  const indexByKey = new Map();
 
   for (const source of [...citationSources, ...searchedSources]) {
-    const key = normalizeSourceUrl(source.url);
-    const existingIndex = indexByUrl.get(key);
+    const key = sourceKey(source.url);
+    const existingIndex = indexByKey.get(key);
     if (existingIndex == null) {
-      indexByUrl.set(key, out.length);
+      indexByKey.set(key, out.length);
       out.push(source);
       continue;
     }
@@ -525,6 +496,7 @@ function dedupeResponsesSources(citationSources, searchedSources) {
 
     if (!usableTitle(existing.title) && usableTitle(source.title)) existing.title = source.title;
     if (!existing.snippet && source.snippet) existing.snippet = source.snippet;
+    if (!existing.x_handle && source.x_handle) existing.x_handle = source.x_handle;
   }
 
   return out;
@@ -537,7 +509,7 @@ function dedupeResponsesSources(citationSources, searchedSources) {
 function markOpenedSources(sources, openedUrls) {
   const remaining = new Map(openedUrls);
   for (const source of sources) {
-    const key = normalizeSourceUrl(source.url);
+    const key = sourceKey(source.url);
     if (!remaining.has(key)) continue;
     source.opened = true;
     remaining.delete(key);

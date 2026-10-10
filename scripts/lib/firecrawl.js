@@ -1,6 +1,6 @@
 import { recordFirecrawlCooldown } from "./cooldown.js";
 import { authHeaders, backoffMs, debugLog, isPlainObject, requestJson, sleep, trimBody, upstreamMessage } from "./http.js";
-import { domainFilters } from "./sources.js";
+import { domainFilters, sourceCard } from "./sources.js";
 
 export function firecrawlAuthMode(config) {
   return config?.firecrawlApiKey ? "api_key" : "keyless";
@@ -167,14 +167,7 @@ export async function firecrawlScrape(url, config, { timeoutMs = 90_000 } = {}) 
 }
 
 function sourceFromFirecrawl(result) {
-  const url = typeof result?.url === "string" ? result.url.trim() : "";
-  if (!url) return null;
-  return {
-    url,
-    provider: "firecrawl",
-    ...(result.title ? { title: String(result.title).trim() } : {}),
-    ...(result.description ? { description: String(result.description).trim() } : {}),
-  };
+  return sourceCard(result?.url, { provider: "firecrawl", title: result?.title, snippet: result?.description });
 }
 
 export async function firecrawlSearch(query, limit, config, filters = {}) {

@@ -8,6 +8,8 @@ import {
   mergeSources,
   parseXPostUrl,
   selectSources,
+  sourceCard,
+  sourceKey,
 } from "../scripts/lib/sources.js";
 import { inMapScope, mapScope, scopePattern } from "../scripts/lib/map-scope.js";
 
@@ -52,10 +54,10 @@ assert.deepEqual(
 );
 
 // A duplicate URL fills in what the first record lacks: a marker title gives way to a real
-// one, the description becomes the snippet, and the contributing provider is recorded.
+// one, the snippet is taken, and the contributing provider is recorded.
 const mergedCitation = mergeSources(
   [{ provider: "grok-responses", source_type: "citation", url: "https://example.com/post", title: "1" }],
-  [{ provider: "firecrawl", url: "https://example.com/post/", title: "Great Post Title", description: "A useful description", score: 0.5 }]
+  [{ provider: "firecrawl", url: "https://example.com/post/", title: "Great Post Title", snippet: "A useful description", score: 0.5 }]
 );
 assert.deepEqual(mergedCitation, [
   {
@@ -75,7 +77,7 @@ const keptTitle = mergeSources(
   [{ provider: "grok-responses", source_type: "citation", url: "https://example.com/a", title: "Original", snippet: "kept" }],
   [
     { provider: "tavily", url: "https://example.com/other" },
-    { provider: "tavily", url: "https://example.com/a", title: "Other", description: "ignored" },
+    { provider: "tavily", url: "https://example.com/a", title: "Other", snippet: "ignored" },
   ]
 );
 assert.equal(keptTitle[0].title, "Original");
@@ -98,6 +100,26 @@ assert.deepEqual(xMerged.map((source) => source.url), [
 ]);
 assert.equal(xMerged[0].x_handle, "trq212");
 assert.equal(xMerged[0].title, "@trq212");
+// One constructor for every channel's cards: URL normalized, blanks left out, X attribution from
+// the URL, a marker or the URL itself dropped as a title.
+assert.deepEqual(
+  sourceCard(" https://Example.com/a/#top ", { provider: "tavily", title: " T ", snippet: "", published_date: "2026-01-02", score: 0.5 }),
+  { provider: "tavily", url: "https://example.com/a", title: "T", published_date: "2026-01-02", score: 0.5 }
+);
+assert.deepEqual(
+  sourceCard("https://x.com/i/status/5", { provider: "grok-responses", source_type: "citation", tool: "x_search", title: "1" }),
+  { provider: "grok-responses", url: "https://x.com/i/status/5", source_type: "citation", tool: "x_search", x_post_id: "5" }
+);
+assert.deepEqual(
+  sourceCard("https://x.com/xai/status/5", { provider: "grok-responses", source_type: "citation", title: "[2]", opened: true }),
+  { provider: "grok-responses", url: "https://x.com/xai/status/5", source_type: "citation", opened: true, x_handle: "xai", x_post_id: "5", title: "@xai" }
+);
+assert.equal(sourceCard("https://x.com/xai/status/5", { provider: "grok-responses", title: "Real" }).title, "Real");
+assert.equal(sourceCard("https://example.com/p", { provider: "grok-responses", title: "https://example.com/p" }).title, undefined);
+assert.equal(sourceCard("", { provider: "tavily" }), null);
+// The identity cards are deduplicated by, in Grok's lists and across channels alike.
+assert.equal(sourceKey("https://x.com/i/status/5"), sourceKey("https://x.com/xai/status/5/"));
+assert.equal(sourceKey("https://Example.com/a/"), "https://example.com/a");
 assert.equal(isCitationMarker("1"), true);
 assert.equal(isCitationMarker("[12]"), true);
 assert.equal(isCitationMarker("Issue #12"), false);
@@ -126,7 +148,7 @@ const compacted = compactSource(
     provider: "tavily",
     title: "  Example  ",
     url: "https://example.com/a",
-    description: "abcdefghijklmnopqrstuvwxyz",
+    snippet: "abcdefghijklmnopqrstuvwxyz",
     score: 0.91,
     published_date: "2026-06-22",
     raw_extra: { hidden: true },
@@ -144,7 +166,7 @@ assert.deepEqual(compacted, {
 assert.equal(Object.hasOwn(compacted, "description"), false);
 assert.equal(Object.hasOwn(compacted, "content"), false);
 
-const noSnippet = compactSource({ provider: "grok", url: "https://example.com/b", description: "hidden" }, { sourceChars: 0 });
+const noSnippet = compactSource({ provider: "grok", url: "https://example.com/b", snippet: "hidden" }, { sourceChars: 0 });
 assert.deepEqual(noSnippet, { provider: "grok", url: "https://example.com/b" });
 
 const rankedSources = [
@@ -224,9 +246,9 @@ const twelve = Array.from({ length: 12 }, (_, i) => ({
 }));
 const agreedPicked = selectSources(
   mergeSources(twelve, [
-    { provider: "firecrawl", url: "https://g.example/12", title: "Same", description: "same" },
-    { provider: "firecrawl", url: "https://f.example/2", title: "F2", description: "d" },
-    { provider: "firecrawl", url: "https://f.example/3", title: "F3", description: "d" },
+    { provider: "firecrawl", url: "https://g.example/12", title: "Same", snippet: "same" },
+    { provider: "firecrawl", url: "https://f.example/2", title: "F2", snippet: "d" },
+    { provider: "firecrawl", url: "https://f.example/3", title: "F3", snippet: "d" },
   ]),
   { maxSources: 12 }
 ).items.map((source) => source.url);

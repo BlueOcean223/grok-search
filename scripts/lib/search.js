@@ -538,7 +538,7 @@ function degradedAnswer(sources, label) {
     for (const [index, source] of items.entries()) {
       const title = String(source.title || `Result ${index + 1}`).trim();
       lines.push(`${index + 1}. [${title}](${source.url})`);
-      const snippet = clipText(source.snippet || source.description || source.content);
+      const snippet = clipText(source.snippet);
       if (snippet) lines.push(`   ${snippet.replace(/\s+/g, " ")}`);
     }
     lines.push("");

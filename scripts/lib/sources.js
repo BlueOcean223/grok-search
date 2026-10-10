@@ -86,7 +86,7 @@ export function normalizeSourceUrl(url) {
   }
 }
 
-function textField(value) {
+export function textField(value) {
   return typeof value === "string" && value.trim() ? value.trim() : "";
 }
 
@@ -98,30 +98,60 @@ export function isCitationMarker(title) {
   return /^\[?\d+\]?$/.test(String(title || "").trim());
 }
 
-function hasUsableTitle(source) {
-  const title = textField(source?.title);
-  return Boolean(title) && !isCitationMarker(title);
+/** A title that says something about the page: present and not a citation marker. */
+export function usableTitle(title) {
+  const text = textField(title);
+  return Boolean(text) && !isCitationMarker(text);
 }
 
-function sourceSnippet(source) {
-  return textField(source?.snippet) || textField(source?.description) || textField(source?.content);
+/**
+ * A source card from what a channel knows about a page. Every channel builds its cards here, so
+ * a card has one shape wherever it came from: the URL normalized, strings trimmed, empty fields
+ * left out, `snippet` the one name for descriptive text. For an X post the handle and post id
+ * come from the URL. A title that is only a citation marker ("1") or the URL itself says nothing
+ * about the page and is dropped; an X handle stands in as "@handle". Returns null without a URL.
+ */
+export function sourceCard(url, { provider, source_type, tool, opened, title, snippet, published_date, score } = {}) {
+  const rawUrl = textField(url);
+  if (!rawUrl) return null;
+  const normalizedUrl = normalizeSourceUrl(rawUrl);
+  const givenTitle = textField(title);
+  const realTitle = givenTitle !== rawUrl && givenTitle !== normalizedUrl && usableTitle(givenTitle) ? givenTitle : "";
+  const post = parseXPostUrl(normalizedUrl);
+
+  const card = { provider, url: normalizedUrl };
+  const sourceType = textField(source_type);
+  if (sourceType) card.source_type = sourceType;
+  const toolName = textField(tool);
+  if (toolName) card.tool = toolName;
+  if (opened === true) card.opened = true;
+  if (post?.x_handle) card.x_handle = post.x_handle;
+  if (post?.x_post_id) card.x_post_id = post.x_post_id;
+  const cardTitle = realTitle || (post?.x_handle ? `@${post.x_handle}` : "");
+  if (cardTitle) card.title = cardTitle;
+  const text = textField(snippet);
+  if (text) card.snippet = text;
+  const date = textField(published_date);
+  if (date) card.published_date = date;
+  if (Number.isFinite(score)) card.score = score;
+  return card;
 }
 
 /**
  * Fill what the first record of a URL lacks from a later duplicate. A Grok citation arrives
  * as a bare URL with a marker title; the same page found by Tavily or Firecrawl has a title
- * and a description. Dropping the duplicate threw both away.
+ * and a snippet. Dropping the duplicate threw both away.
  */
 function mergeSourceFields(existing, incoming) {
   const out = { ...existing };
   let merged = false;
 
-  if (!hasUsableTitle(out) && hasUsableTitle(incoming)) {
+  if (!usableTitle(out.title) && usableTitle(incoming.title)) {
     out.title = textField(incoming.title);
     merged = true;
   }
-  if (!sourceSnippet(out) && sourceSnippet(incoming)) {
-    out.snippet = sourceSnippet(incoming);
+  if (!textField(out.snippet) && textField(incoming.snippet)) {
+    out.snippet = textField(incoming.snippet);
     merged = true;
   }
   for (const key of ["published_date", "x_handle", "x_post_id"]) {
@@ -149,11 +179,13 @@ function mergeSourceFields(existing, incoming) {
 }
 
 /**
- * One key per X post whatever the URL form. xAI's X search cites `/i/status/<id>`, which names
- * no author (120 of 186 grok-4.6 X-search cards on record up to 2026-10-10), while the answer
- * may link the same post as `/<handle>/status/<id>`; merging the two puts the handle on one card.
+ * The identity a card is deduplicated by, everywhere cards meet (Grok's own lists, the merge
+ * across channels, the pages Grok opened): the normalized URL, or one key per X post whatever
+ * the URL form. xAI's X search cites `/i/status/<id>`, which names no author (120 of 186
+ * grok-4.6 X-search cards on record up to 2026-10-10), while the answer may link the same post
+ * as `/<handle>/status/<id>`; merging the two puts the handle on one card.
  */
-function sourceKey(url) {
+export function sourceKey(url) {
   const post = isXUrl(url) ? parseXPostUrl(url) : null;
   return post?.x_post_id ? `x-post:${post.x_post_id}` : normalizeSourceUrl(url);
 }
@@ -227,7 +259,7 @@ export function compactSource(source, { sourceChars = 400 } = {}) {
   const xPostId = textField(source?.x_post_id);
   if (xPostId) out.x_post_id = xPostId;
 
-  const snippet = clipText(sourceSnippet(source), sourceChars);
+  const snippet = clipText(source?.snippet, sourceChars);
   if (snippet) out.snippet = snippet;
 
   if (Number.isFinite(source?.score)) out.score = source.score;
