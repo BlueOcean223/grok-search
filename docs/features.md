@@ -43,7 +43,7 @@ Responses sources 与 extra sources 去重合并后写入 `sources.items`（默�
 - `tool: web_search | x_search | openrouter:web_search`
 - `x_handle` / `x_post_id`（X 来源专有，从 URL 解析）
 
-裁剪顺序 citation > opened > 域内 extra > searched > 域外 extra。序号标题（`"1"`、`[2]`）视为缺失，由检索列表里的真标题替换；没有真标题时不输出 `title`。
+超出上限时用 Reciprocal Rank Fusion（RRF，k=60）合并 Grok 与 Tavily、Firecrawl 的结果列表后取前 N 条。Grok 列表内按 citation > opened > searched 排，两家各按自己返回的顺序；多路都返回的 URL 每一路都计分；域外 extra 排在最后。原先 Grok 的卡片一律排在 extra 前面，2026-10-10 统计运行记录：182 次带 extra 的搜索里有 44 次 extra 一张都没进卡片，多数是答案引用了 12 个以上链接，而这些链接本来就在 `answer.text` 里。改用 RRF 后这类情况为 0 次，卡片 JSON 平均多约 0.7KB，最大值不变。序号标题（`"1"`、`[2]`）视为缺失，由检索列表里的真标题替换；没有真标题时不输出 `title`。
 
 ### 独立补充信源
 

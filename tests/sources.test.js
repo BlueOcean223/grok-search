@@ -131,8 +131,8 @@ const rankedSources = [
   { url: "https://e.example/4", source_type: "searched" },
 ];
 const capped = selectSources(rankedSources, { maxSources: 2 });
-// Citation and extra-provider sources outrank searched-only ones; the picked
-// subset keeps the original order.
+// The first of Grok's list (the citation) and of Tavily's come before Grok's searched-only
+// ones; the picked subset keeps the original order.
 assert.deepEqual(
   capped.items.map((source) => source.url),
   ["https://e.example/2", "https://e.example/3"]
@@ -146,31 +146,60 @@ assert.equal(uncapped.returned, 4);
 assert.equal(uncapped.omitted, 0);
 assert.deepEqual(selectSources([], { maxSources: 5 }), { items: [], total: 0, returned: 0, omitted: 0 });
 
-// Full ranking: citation > opened > in-domain extra > searched > off-domain extra.
+// Cards are picked by Reciprocal Rank Fusion: Grok's list and each extra provider's take turns,
+// so extras show even when the citations alone would fill the cards.
+const fused = [
+  ...[1, 2, 3, 4, 5, 6].map((n) => ({ url: `https://g.example/cited-${n}`, source_type: "citation" })),
+  { url: "https://t.example/1", provider: "tavily" },
+  { url: "https://t.example/2", provider: "tavily" },
+  { url: "https://f.example/1", provider: "firecrawl" },
+];
+assert.deepEqual(
+  selectSources(fused, { maxSources: 6 }).items.map((source) => source.url),
+  [
+    "https://g.example/cited-1",
+    "https://g.example/cited-2",
+    "https://g.example/cited-3",
+    "https://t.example/1",
+    "https://t.example/2",
+    "https://f.example/1",
+  ]
+);
+
+// Grok's list runs cited > opened > searched whatever the input order, and a URL an extra
+// provider also returned (merged into Grok's card) scores in both lists.
+const grokOrder = [
+  { url: "https://g.example/searched", source_type: "searched" },
+  { url: "https://g.example/opened", source_type: "searched", opened: true },
+  { url: "https://g.example/cited", source_type: "citation" },
+  { url: "https://g.example/agreed", source_type: "searched", merged_from: ["tavily"] },
+  { url: "https://t.example/1", provider: "tavily" },
+];
+assert.deepEqual(
+  selectSources(grokOrder, { maxSources: 2 }).items.map((source) => source.url),
+  ["https://g.example/cited", "https://g.example/agreed"]
+);
+assert.deepEqual(
+  selectSources(grokOrder, { maxSources: 4 }).items.map((source) => source.url),
+  ["https://g.example/opened", "https://g.example/cited", "https://g.example/agreed", "https://t.example/1"]
+);
+
+// An extra result outside the requested domains goes last, though it tops its provider's list.
 const domainRanked = [
-  { url: "https://medium.com/off", provider: "firecrawl" },
-  { url: "https://github.com/searched", source_type: "searched" },
-  { url: "https://github.com/opened", source_type: "searched", opened: true },
-  { url: "https://gist.github.com/extra", provider: "tavily" },
   { url: "https://github.com/cited", source_type: "citation" },
+  { url: "https://github.com/searched", source_type: "searched" },
+  { url: "https://gist.github.com/extra", provider: "tavily" },
+  { url: "https://medium.com/off", provider: "firecrawl" },
 ];
 const domainFilters = { allowedDomains: ["github.com"], excludedDomains: [] };
 assert.deepEqual(
-  selectSources(domainRanked, { maxSources: 1, ...domainFilters }).items.map((source) => source.url),
-  ["https://github.com/cited"]
+  selectSources(domainRanked, { maxSources: 3, ...domainFilters }).items.map((source) => source.url),
+  ["https://github.com/cited", "https://github.com/searched", "https://gist.github.com/extra"]
 );
+// Without filters it is an ordinary first result.
 assert.deepEqual(
-  selectSources(domainRanked, { maxSources: 2, ...domainFilters }).items.map((source) => source.url),
-  ["https://github.com/opened", "https://github.com/cited"]
-);
-assert.deepEqual(
-  selectSources(domainRanked, { maxSources: 4, ...domainFilters }).items.map((source) => source.url),
-  ["https://github.com/searched", "https://github.com/opened", "https://gist.github.com/extra", "https://github.com/cited"]
-);
-// Without filters the extra keeps its place ahead of searched-only sources.
-assert.deepEqual(
-  selectSources(domainRanked, { maxSources: 4 }).items.map((source) => source.url),
-  ["https://medium.com/off", "https://github.com/opened", "https://gist.github.com/extra", "https://github.com/cited"]
+  selectSources(domainRanked, { maxSources: 3 }).items.map((source) => source.url),
+  ["https://github.com/cited", "https://gist.github.com/extra", "https://medium.com/off"]
 );
 
 console.log("sources fixtures ok");

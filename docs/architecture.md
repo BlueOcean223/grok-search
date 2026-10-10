@@ -43,7 +43,7 @@ query
        ↓ 三路并行
   result JSON
        ├─ answer
-       ├─ sources.items（合并去重后按 citation > opened > 域内 extra > searched > 域外 extra 裁剪，默认 12 条）
+       ├─ sources.items（合并去重；超出上限时按 RRF 合并 Grok 与各 extra provider 的列表后裁剪，域外 extra 最后，默认 12 条）
        ├─ sources.returned / total / omitted
        ├─ sources.raw_path（总是指向本次运行记录）
        └─ diagnostics

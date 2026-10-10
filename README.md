@@ -263,7 +263,7 @@ X citation 只返回裸 URL、且 `title` 是 inline citation 序号，因此 so
 `search.js` 只使用 Responses 协议，以 `stream:false` 调用 `{GROK_API_URL}/responses`，启用 provider-native web search，并返回：
 
 - `answer.text`、`answer.chars`、`answer.original_chars`、`answer.truncated`、`answer.full_path`
-- `sources.items`：单份去重合并后的短 source card 列表，默认最多 `12` 条（`--max-sources` 可调）；裁剪顺序为 `citation` > `opened: true`（Grok 用 `open_page` 成功读过的页面）> 域内 extra > `searched` > 域外 extra。同一 URL 跨通道出现时合并成一张卡，`merged_from` 列出补充了字段的 provider；`"1"`、`[2]` 这类序号标题视为缺失：有真标题就替换，没有就不输出 `title`
+- `sources.items`：单份去重合并后的短 source card 列表，默认最多 `12` 条（`--max-sources` 可调）。超出上限时用 Reciprocal Rank Fusion（RRF，k=60）合并 Grok 与各 extra provider 的结果列表再取前 N 条：Grok 列表内按 `citation` > `opened: true`（Grok 用 `open_page` 成功读过的页面）> `searched` 排，Tavily、Firecrawl 各按自己返回的顺序；多路都返回的 URL 每一路都计分；域外 extra 排在最后。答案引用的链接很多时，有些 `citation` 只出现在 `answer.text` 里。同一 URL 跨通道出现时合并成一张卡，`merged_from` 列出补充了字段的 provider；`"1"`、`[2]` 这类序号标题视为缺失：有真标题就替换，没有就不输出 `title`
 - `sources.returned` / `sources.total` / `sources.omitted`：让调用方明确知道是否被截断
 - `sources.raw_path`：总是有值（除非 `GROK_RUN_LOG=off`），指向本次调用的运行记录：脱敏 argv、query、instructions、生效 options、完整 answer、未裁剪的 source 列表、`grok_tool_calls`、diagnostics；失败与 `DEADLINE_EXCEEDED` 也会写
 - `sources.raw`，仅在使用 `--full-sources` 时出现

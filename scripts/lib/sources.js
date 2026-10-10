@@ -259,18 +259,51 @@ export function isOffDomainExtra(source, { allowedDomains = [], excludedDomains 
   return false;
 }
 
-/**
- * Ranking for the visible cards: cited > opened by Grok > extra providers > merely listed by
- * a search > extra results outside the requested domains.
- */
-function sourceRank(source, filters) {
-  const type = textField(source?.source_type);
-  if (type === "citation") return 0;
-  if (source?.opened === true) return 1;
-  if (type === "searched") return 3;
-  return isOffDomainExtra(source, filters) ? 4 : 2;
+// Reciprocal Rank Fusion constant: the value from the original paper (Cormack et al., 2009) and
+// the default in Elasticsearch, OpenSearch and Azure AI Search.
+const RRF_K = 60;
+
+/** Grok's own order for its cards: cited > opened by Grok > merely listed by a search. */
+function grokRank(source) {
+  if (textField(source?.source_type) === "citation") return 0;
+  return source?.opened === true ? 1 : 2;
 }
 
+/** The result lists a card was in: Grok's or one extra provider's, plus any merged into it. */
+function resultLists(source) {
+  const own = isExtraSource(source) ? textField(source?.provider) : "grok";
+  return new Set([own, ...(source?.merged_from || [])]);
+}
+
+/**
+ * Reciprocal Rank Fusion over the lists the cards came from: Grok's, in grokRank order, and each
+ * extra provider's, in the order it returned them. A card scores 1 / (RRF_K + rank) in every
+ * list it is in, so a URL that two channels returned rises.
+ */
+function fusionScores(sources) {
+  const lists = new Map();
+  sources.forEach((source, index) => {
+    for (const name of resultLists(source)) {
+      if (!lists.has(name)) lists.set(name, []);
+      lists.get(name).push(index);
+    }
+  });
+  const scores = sources.map(() => 0);
+  for (const [name, indexes] of lists) {
+    if (name === "grok") indexes.sort((a, b) => grokRank(sources[a]) - grokRank(sources[b]) || a - b);
+    indexes.forEach((index, position) => {
+      scores[index] += 1 / (RRF_K + position + 1);
+    });
+  }
+  return scores;
+}
+
+/**
+ * The visible cards, picked by fusionScores. Ranking every Grok card ahead of the extra
+ * providers hid all extras in 44 of the 182 searches on record that had them (2026-10-10);
+ * in 38 the answer cited 12 or more links, which filled the cards and are in the answer
+ * already. Extra results outside the requested domains go last.
+ */
 export function selectSources(sources, { maxSources, allowedDomains = [], excludedDomains = [] } = {}) {
   const list = sources || [];
   const total = list.length;
@@ -279,9 +312,10 @@ export function selectSources(sources, { maxSources, allowedDomains = [], exclud
 
   let items = list;
   if (total > limit) {
+    const scores = fusionScores(list);
     items = list
-      .map((source, index) => ({ source, index, rank: sourceRank(source, filters) }))
-      .sort((a, b) => a.rank - b.rank || a.index - b.index)
+      .map((source, index) => ({ source, index, offDomain: isOffDomainExtra(source, filters), score: scores[index] }))
+      .sort((a, b) => a.offDomain - b.offDomain || b.score - a.score || a.index - b.index)
       .slice(0, limit)
       .sort((a, b) => a.index - b.index)
       .map((entry) => entry.source);
