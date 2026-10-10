@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { loadConfig } from "./lib/config.js";
 import { startDeadline } from "./lib/deadline.js";
+import { FETCH_CACHE_TTL_MS, readFetchCache, writeFetchCache } from "./lib/fetch-cache.js";
 import {
   cleanupOutputDir,
   fitTextToStdoutBudget,
@@ -9,6 +10,7 @@ import {
   runRecordBase,
   runRecordPath,
   STDOUT_BUDGET_BYTES,
+  withNotices,
   writeFullOutput,
   writeRunRecord,
   writeRunRecordSync,
@@ -19,9 +21,15 @@ import { assertProxyUsable } from "./lib/proxy.js";
 const DEFAULT_MAX_CHARS = 12000;
 
 function usage() {
-  return `Usage: ./scripts/fetch.js [--provider auto|tavily|firecrawl|direct] [--max-chars N] [--deadline SECONDS] <url>
+  return `Usage: ./scripts/fetch.js [--provider auto|tavily|firecrawl|direct] [--max-chars N] [--offset N] [--no-cache] [--deadline SECONDS] <url>
 
-Fetch a web page as readable text/Markdown using Tavily Extract, Firecrawl Scrape, then Direct Fetch.
+Fetch a web page as readable text/Markdown. auto: Direct when the server sends Markdown or another
+non-HTML type (returned as served), otherwise Firecrawl Scrape, then Tavily Extract, then Direct's HTML.
+
+Options:
+  --max-chars N        Characters of text to print (default ${DEFAULT_MAX_CHARS}); the full text goes to content.full_path
+  --offset N           Start at character N, to continue a page that was cut
+  --no-cache           Fetch again even if this URL was fetched in the last ${FETCH_CACHE_TTL_MS / 60000} minutes
 
 Environment:
   TAVILY_API_KEY       Tavily key used by the primary provider
@@ -46,6 +54,8 @@ function parseArgs(argv) {
   const args = [...argv];
   let provider = "auto";
   let maxChars = DEFAULT_MAX_CHARS;
+  let offset = 0;
+  let noCache = false;
   let deadline = null;
   let url;
 
@@ -68,6 +78,18 @@ function parseArgs(argv) {
     }
     if (arg?.startsWith("--max-chars=")) {
       maxChars = parseIntOption("--max-chars", arg.slice("--max-chars=".length), { min: 0 });
+      continue;
+    }
+    if (arg === "--offset") {
+      offset = parseIntOption("--offset", args.shift(), { min: 0 });
+      continue;
+    }
+    if (arg?.startsWith("--offset=")) {
+      offset = parseIntOption("--offset", arg.slice("--offset=".length), { min: 0 });
+      continue;
+    }
+    if (arg === "--no-cache") {
+      noCache = true;
       continue;
     }
     if (arg === "--deadline") {
@@ -102,7 +124,7 @@ function parseArgs(argv) {
     throw new Error("URL 必须使用 http 或 https 协议");
   }
 
-  return { url: parsed.toString(), provider, maxChars, deadline };
+  return { url: parsed.toString(), provider, maxChars, offset, noCache, deadline };
 }
 
 // Firecrawl bills ordinary pages at 1 credit; X posts and other JS-heavy pages cost ~30, and
@@ -123,12 +145,20 @@ function landedOnSiteRoot(requestedUrl, finalUrl) {
   }
 }
 
-async function publicResult(args, result, config, durationMs) {
-  const ok = Boolean(result.ok);
-  const warnings = [...(result.warnings || [])];
-  if (ok && result.redirected && landedOnSiteRoot(args.url, result.final_url)) {
-    warnings.push(`The page redirected to the site's home page (${result.final_url}); the requested page probably no longer exists.`);
+/** Warnings that say the text is not what was asked for; they also open content.text. */
+function contentNotices(args, result) {
+  const notices = [...(result.notices || [])];
+  if (result.ok && result.redirected && landedOnSiteRoot(args.url, result.final_url)) {
+    notices.push(
+      `The page redirected to the site's home page (${result.final_url}); the requested page probably no longer exists, and the text below is that home page.`
+    );
   }
+  return notices;
+}
+
+async function publicResult(args, result, config, durationMs, notices) {
+  const ok = Boolean(result.ok);
+  const warnings = [...(result.warnings || []), ...notices];
   if (Number.isFinite(result.credits_used) && result.credits_used >= HIGH_CREDITS_THRESHOLD) {
     warnings.push(
       `Firecrawl used ${result.credits_used} credits on this page (an ordinary page costs 1); a few such fetches use up the keyless tier's daily allowance. For X posts prefer Direct.`
@@ -138,11 +168,14 @@ async function publicResult(args, result, config, durationMs) {
   const diagnostics = {
     provider: result.provider,
     ...(result.auth_mode ? { firecrawl_auth_mode: result.auth_mode } : {}),
+    ...(result.cache ? { cache: result.cache } : {}),
     warnings,
     provider_attempts: result.tried || [],
     options: {
       provider: args.provider,
       max_chars: args.maxChars,
+      offset: args.offset,
+      no_cache: args.noCache,
     },
     duration_ms: durationMs,
     fetched_at: fetchedAt,
@@ -161,16 +194,15 @@ async function publicResult(args, result, config, durationMs) {
     };
   }
 
-  const contentInfo = ok
-    ? await previewText(config, {
-        kind: "fetch",
-        provider: result.provider,
-        label: result.final_url || args.url,
-        content: result.content || "",
-        maxChars: args.maxChars,
-        extension: "md",
-      })
-    : { preview: "", truncated: false, original_length: 0, full_output_path: null };
+  const contentInfo = await previewText(config, {
+    kind: "fetch",
+    provider: result.provider,
+    label: result.final_url || args.url,
+    content: result.content || "",
+    maxChars: args.maxChars,
+    offset: args.offset,
+    extension: "md",
+  });
 
   return {
     url: args.url,
@@ -179,6 +211,7 @@ async function publicResult(args, result, config, durationMs) {
     metadata: result.metadata || {},
     content: {
       text: contentInfo.preview,
+      offset: contentInfo.offset,
       chars: contentInfo.preview.length,
       original_chars: contentInfo.original_length,
       truncated: contentInfo.truncated,
@@ -188,23 +221,51 @@ async function publicResult(args, result, config, durationMs) {
   };
 }
 
-/** `--max-chars` counts characters; what the agent's shell keeps is bytes of the whole JSON. */
-async function fitContentToStdout(config, output, result) {
+/**
+ * Where the rest of a cut page is. Agents asked for a larger --max-chars to see past a preview
+ * (a CrowdStrike post whose first 29,618 characters were navigation, 2026-10-08), printing the
+ * start again; --offset continues from the cut, and the cache makes it free.
+ */
+function continueNotice(content, shownChars) {
+  const end = content.offset + shownChars;
+  if (end >= content.original_chars) return null;
+  return `Showing characters ${content.offset}–${end} of ${content.original_chars}. For the rest, rerun with --offset ${end} (cached for ${FETCH_CACHE_TTL_MS / 60000} minutes) or read ${content.full_path}.`;
+}
+
+/**
+ * Put the notices into content.text and keep the whole JSON within the stdout budget:
+ * `--max-chars` counts characters, what the agent's shell keeps is bytes of the whole JSON.
+ * `content.chars` counts the page text shown, not the notices.
+ */
+async function finishContent(config, output, result, notices) {
   const content = output.content;
-  const cut = await fitTextToStdoutBudget(output, content, "text", async () => {
-    content.full_path ??= await writeFullOutput(config, {
-      kind: "fetch",
-      provider: result.provider,
-      label: output.final_url,
-      content: result.content || "",
-      extension: "md",
-    });
-    content.truncated = true;
-    output.diagnostics.warnings.push(
-      `content.text keeps only the beginning so the whole output stays under ${STDOUT_BUDGET_BYTES / 1024}KB (agent shell tools cut longer output); the full text is in content.full_path, read it in chunks.`
-    );
-  });
-  if (cut) content.chars = content.text.length;
+  const requestedOffset = output.diagnostics.options.offset;
+  const lead = [...notices];
+  if (requestedOffset > content.original_chars) {
+    lead.push(`--offset ${requestedOffset} is past the end of the text, which has ${content.original_chars} characters.`);
+    output.diagnostics.warnings.push(lead.at(-1));
+  }
+  const compose = (text) => withNotices(text, { lead, tail: [continueNotice(content, text.length)].filter(Boolean) });
+  const kept = await fitTextToStdoutBudget(
+    output,
+    content,
+    "text",
+    async () => {
+      content.full_path ??= await writeFullOutput(config, {
+        kind: "fetch",
+        provider: result.provider,
+        label: output.final_url,
+        content: result.content || "",
+        extension: "md",
+      });
+      content.truncated = true;
+      output.diagnostics.warnings.push(
+        `content.text was cut to keep the whole output under ${STDOUT_BUDGET_BYTES / 1024}KB (agent shell tools cut longer output); its last line gives the --offset to continue from, and content.full_path has the full text.`
+      );
+    },
+    { compose }
+  );
+  if (kept != null) content.chars = kept.length;
 }
 
 function errorOutput(error, code) {
@@ -234,7 +295,12 @@ function runRecord(config, args, output, result) {
     content: result?.ok ? result.content || "" : null,
     // What stdout carried of it: the preview length and, when cut, where the full text went.
     printed_content: output.content
-      ? { chars: output.content.chars, truncated: output.content.truncated, full_path: output.content.full_path }
+      ? {
+          offset: output.content.offset,
+          chars: output.content.chars,
+          truncated: output.content.truncated,
+          full_path: output.content.full_path,
+        }
       : null,
     provider_attempts: output.diagnostics.provider_attempts,
     warnings: output.diagnostics.warnings,
@@ -270,11 +336,14 @@ try {
   });
   try {
     const startedAtMs = Date.now();
-    const result = await fetchUrl(args.url, config, { provider: args.provider });
-    const output = await publicResult(args, result, config, Date.now() - startedAtMs);
+    const cached = args.noCache ? null : await readFetchCache(config, args.url, args.provider);
+    const result = cached ?? (await fetchUrl(args.url, config, { provider: args.provider }));
+    if (!cached) await writeFetchCache(config, args.url, args.provider, result);
+    const notices = contentNotices(args, result);
+    const output = await publicResult(args, result, config, Date.now() - startedAtMs, notices);
     const runPath = runRecordPath(config, { kind: "fetch", label: result.final_url || args.url });
     if (runPath) output.diagnostics.run_path = runPath;
-    if (output.content) await fitContentToStdout(config, output, result);
+    if (output.content) await finishContent(config, output, result, notices);
     if (!(await writeRunRecord(config, { at: runPath, record: runRecord(config, args, output, result) }))) {
       delete output.diagnostics.run_path;
     }

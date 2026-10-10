@@ -366,14 +366,17 @@ function renderDirectContent(text, contentType, finalUrl) {
     const readable = stripHtmlToReadableText(text);
     return isXUrl(finalUrl) ? collapseRepeatedLines(readable) : readable;
   }
+  // Everything else comes back as served, so a raw file's full_path is the file. An agent
+  // copied a fetched CHANGELOG.md on 2026-10-08 and downloaded it again with curl to check it;
+  // the only difference was the final newline this used to trim.
   if (type.includes("json")) {
     try {
       return JSON.stringify(JSON.parse(text), null, 2);
     } catch {
-      return text.trim();
+      return text;
     }
   }
-  return text.trim();
+  return text;
 }
 
 // ISO timestamps put a 'T' right after the date, so the tail needs a lookahead, not \b.
@@ -521,10 +524,11 @@ export async function directFetch(url, options = {}) {
 
     const content = renderDirectContent(body.text, contentType, finalUrl);
     // HTML gets its <title> as a "# " line, so an empty page still yields text. Reddit served
-    // a script-only shell on 2026-10-08 and the fetch came back as just "# Reddit".
-    if (!content.replace(/^# [^\n]*\n*/, "").trim()) {
-      warnings.push("Direct Fetch got no text beyond the page title; the page may need JavaScript or block automated access.");
-    }
+    // a script-only shell on 2026-10-08 and the fetch came back as just "# Reddit". A notice,
+    // not just a warning: it says the text is not the page.
+    const notices = content.replace(/^# [^\n]*\n*/, "").trim()
+      ? []
+      : ["Direct Fetch got no text beyond the page title; the page may need JavaScript or block automated access."];
 
     return finish({
       ok: true,
@@ -534,6 +538,7 @@ export async function directFetch(url, options = {}) {
       redirected,
       metadata,
       warnings,
+      notices,
     });
   } catch (error) {
     clearTimeout(timer);

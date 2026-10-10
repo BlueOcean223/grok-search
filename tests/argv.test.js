@@ -9,11 +9,12 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 const testHome = await mkdtemp(path.join(tmpdir(), "grok-search-test-home-"));
-// Provider cooldowns persist across commands; give the suite its own state dir so one
-// fixture's quota failure cannot leak into the next.
-const testState = await mkdtemp(path.join(tmpdir(), "grok-search-test-state-"));
 
 async function runNode(args, env = {}) {
+  // Provider cooldowns and the fetch cache persist across commands. Each command gets its own
+  // state dir, so one fixture's quota failure or cached page (a reused port serves another
+  // fixture's URL) cannot leak into the next; a test that needs state passes GROK_STATE_DIR.
+  const stateDir = await mkdtemp(path.join(tmpdir(), "grok-search-test-state-"));
   try {
     const result = await execFileAsync("node", args, {
       cwd: process.cwd(),
@@ -21,7 +22,7 @@ async function runNode(args, env = {}) {
         ...process.env,
         HOME: testHome,
         USERPROFILE: testHome,
-        GROK_STATE_DIR: testState,
+        GROK_STATE_DIR: stateDir,
         TAVILY_API_KEY: "",
         FIRECRAWL_API_KEY: "",
         TAVILY_API_URL: "",
@@ -153,13 +154,19 @@ await withServer(
     assert.equal(defaultFetch.code, 0);
     let output = parseJson(defaultFetch.stdout);
     assert.equal(output.content.chars, 12_000);
+    assert.equal(output.content.offset, 0);
     assert.equal(output.content.truncated, true);
     assert.equal((await readFile(output.content.full_path, "utf8")).length, 13_000);
+    // The cut is said inside the text, for agents that print only content.text.
+    assert.equal(
+      output.content.text,
+      `${"z".repeat(12_000)}\n\n[grok-search] Showing characters 0–12000 of 13000. For the rest, rerun with --offset 12000 (cached for 15 minutes) or read ${output.content.full_path}.`
+    );
     assert.equal(typeof output.diagnostics.duration_ms, "number");
     // The run record keeps the full text and says what stdout carried of it.
     const record = JSON.parse(await readFile(output.diagnostics.run_path, "utf8"));
     assert.equal(record.content.length, 13_000);
-    assert.deepEqual(record.printed_content, { chars: 12_000, truncated: true, full_path: output.content.full_path });
+    assert.deepEqual(record.printed_content, { offset: 0, chars: 12_000, truncated: true, full_path: output.content.full_path });
 
     const explicitFetch = await runNode([
       "scripts/fetch.js",
@@ -172,8 +179,88 @@ await withServer(
     output = parseJson(explicitFetch.stdout);
     assert.equal(output.content.original_chars, 13_000);
     assert.equal(output.content.truncated, false);
+    assert.equal(output.content.text, "z".repeat(13_000));
   }
 );
+
+// Fetching a URL again within 15 minutes reads the cache: --offset continues a cut page and a
+// different filter of the same page costs no request. Failures are not cached; --no-cache and
+// a different provider choice go out again.
+{
+  const cacheState = await mkdtemp(path.join(tmpdir(), "grok-search-cache-state-"));
+  let requests = 0;
+  let failNext = false;
+  await withServer(
+    (req, res) => {
+      req.resume();
+      requests += 1;
+      if (failNext) {
+        failNext = false;
+        res.writeHead(503, { "content-type": "text/plain" });
+        res.end("busy");
+        return;
+      }
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.end(`${"a".repeat(5000)}${"b".repeat(5000)}${"c".repeat(5000)}\n`);
+    },
+    async (_server, port) => {
+      const url = `http://127.0.0.1:${port}/page.txt`;
+      const fetchJson = async (...args) =>
+        parseJson((await runNode(["scripts/fetch.js", ...args, url], { GROK_STATE_DIR: cacheState })).stdout);
+
+      let output = await fetchJson("--provider", "direct", "--max-chars", "5000");
+      assert.equal(requests, 1);
+      assert.equal(Object.hasOwn(output.diagnostics, "cache"), false);
+      assert.match(output.content.text, /rerun with --offset 5000 /);
+      // Non-HTML comes back as served, final newline included.
+      assert.equal((await readFile(output.content.full_path, "utf8")).length, 15_001);
+
+      output = await fetchJson("--provider", "direct", "--max-chars", "5000", "--offset", "5000");
+      assert.equal(requests, 1);
+      assert.equal(output.diagnostics.cache.hit, true);
+      assert.equal(typeof output.diagnostics.cache.fetched_at, "string");
+      assert.deepEqual(output.diagnostics.provider_attempts, []);
+      assert.equal(output.diagnostics.provider, "direct");
+      assert.equal(output.content.offset, 5000);
+      assert.ok(output.content.text.startsWith("b".repeat(5000)));
+      assert.match(output.content.text, /Showing characters 5000–10000 of 15001\. For the rest, rerun with --offset 10000 /);
+      const record = JSON.parse(await readFile(output.diagnostics.run_path, "utf8"));
+      assert.equal(record.diagnostics.cache.hit, true);
+      assert.equal(record.printed_content.offset, 5000);
+
+      // The last part: nothing left to point at.
+      output = await fetchJson("--provider", "direct", "--offset", "10000");
+      assert.equal(requests, 1);
+      assert.equal(output.content.text, `${"c".repeat(5000)}\n`);
+      assert.equal(output.content.truncated, true);
+
+      output = await fetchJson("--provider", "direct", "--offset", "99999");
+      assert.equal(output.content.text, "[grok-search] --offset 99999 is past the end of the text, which has 15001 characters.");
+      assert.match(output.diagnostics.warnings.join("\n"), /past the end/);
+
+      output = await fetchJson("--provider", "direct", "--no-cache");
+      assert.equal(requests, 2);
+      assert.equal(output.diagnostics.options.no_cache, true);
+      assert.equal(Object.hasOwn(output.diagnostics, "cache"), false);
+
+      // auto reuses only what an auto fetch returned, not the --provider direct copies above.
+      output = await fetchJson();
+      assert.equal(requests, 3);
+      output = await fetchJson();
+      assert.equal(requests, 3);
+      assert.equal(output.diagnostics.cache.hit, true);
+
+      // A failure is not cached: the next run asks again.
+      const failState = await mkdtemp(path.join(tmpdir(), "grok-search-cache-state-"));
+      failNext = true;
+      const failed = await runNode(["scripts/fetch.js", "--provider", "direct", url], { GROK_STATE_DIR: failState });
+      assert.equal(failed.code, 1);
+      const retried = parseJson((await runNode(["scripts/fetch.js", "--provider", "direct", url], { GROK_STATE_DIR: failState })).stdout);
+      assert.equal(requests, 5);
+      assert.equal(Object.hasOwn(retried.diagnostics, "cache"), false);
+    }
+  );
+}
 
 await withServer(
   (req, res) => {
@@ -411,6 +498,11 @@ await withServer(
     assert.equal(record.answer.length, 60_000);
     assert.deepEqual(record.printed_answer, { chars: output.answer.chars, truncated: true, full_path: output.answer.full_path });
     assert.match(record.diagnostics.warnings.join("\n"), /answer\.text keeps only the beginning/);
+    // The cut is also said at the end of answer.text, for agents that print only that.
+    assert.equal(
+      output.answer.text,
+      `${"A".repeat(output.answer.chars)}\n\n[grok-search] The answer was cut at ${output.answer.chars} of 60000 characters; the full answer is in ${output.answer.full_path}.`
+    );
   }
 );
 
@@ -1283,8 +1375,11 @@ await withServer(
     assert.ok(output.content.chars < 60_000);
     const record = JSON.parse(await readFile(output.diagnostics.run_path, "utf8"));
     assert.equal(record.content.length, 60_000);
-    assert.deepEqual(record.printed_content, { chars: output.content.chars, truncated: true, full_path: output.content.full_path });
-    assert.match(record.warnings.join("\n"), /content\.text keeps only the beginning/);
+    assert.deepEqual(record.printed_content, { offset: 0, chars: output.content.chars, truncated: true, full_path: output.content.full_path });
+    assert.match(record.warnings.join("\n"), /content\.text was cut to keep the whole output under 45KB/);
+    // The notice survives the cut and the whole output stays within the budget.
+    assert.ok(output.content.text.endsWith(`For the rest, rerun with --offset ${output.content.chars} (cached for 15 minutes) or read ${output.content.full_path}.`));
+    assert.ok(Buffer.byteLength(JSON.stringify(output, null, 2)) + 1 <= 45 * 1024);
   }
 );
 
@@ -1309,6 +1404,9 @@ await withServer(
     assert.equal(output.final_url, "https://www.gov.cn/");
     assert.equal(output.redirected, true);
     assert.match(output.diagnostics.warnings.join("\n"), /redirected to the site's home page \(https:\/\/www\.gov\.cn\/\)/);
+    // The text itself opens with it: the page below is not the one asked for.
+    assert.match(output.content.text, /^\[grok-search\] The page redirected to the site's home page \(https:\/\/www\.gov\.cn\/\).*\n\n# 中国政府网/);
+    assert.equal(output.content.chars, "# 中国政府网\n\n首页".length);
   }
 );
 

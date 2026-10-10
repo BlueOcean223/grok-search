@@ -116,7 +116,8 @@ export async function fetchUrl(url, config, { provider = "auto" } = {}) {
   } else if (provider === "auto") {
     // Direct asks for Markdown first (Accept: text/markdown). Whatever is not HTML comes back
     // as served: Markdown from sites that negotiate it (45 of 153 HTML URLs on record did on
-    // 2026-10-10, code.claude.com and platform.openai.com among them), plain-text files, JSON.
+    // 2026-10-10, code.claude.com and platform.openai.com among them), plain-text files, and
+    // JSON (re-indented).
     // An HTML page goes to the extractors, and Direct's copy is kept as the last resort.
     const result = await directFetch(url);
     const type = result.metadata?.content_type || "";
@@ -147,15 +148,15 @@ export async function fetchUrl(url, config, { provider = "auto" } = {}) {
     // Direct already ran for this URL (an HTML page, or an X post that did not validate). With
     // nothing better available, its copy beats an error; reuse it instead of fetching again.
     if (directFirst.ok) {
-      const warnings = [...(directFirst.warnings || [])];
+      const notices = [...(directFirst.notices || [])];
       if (xPost) {
         const failed = tried.find((attempt) => attempt.provider === "direct" && !attempt.ok);
-        warnings.push(
+        notices.push(
           `The X page Direct fetched failed post validation (${failed?.error || "x_validation_failed"}) and no other provider was available, so it is returned as is; use --provider firecrawl for the full post or the thread.`
         );
       }
       tried.push({ provider: "direct", ok: true, skipped: false, reused: true });
-      return { ...directFirst, warnings, tried };
+      return { ...directFirst, notices, tried };
     }
     return { ...directFirst, tried, error: summarizeFetchFailure(tried, directFirst.error) };
   }

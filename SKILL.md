@@ -23,7 +23,7 @@ Run the fewest commands that answer the question; run independent sub-questions 
 {baseDir}/scripts/search.js --instructions "what to return, language, what to leave out" "plain keywords"
 {baseDir}/scripts/search.js --responses-allowed-domains github.com "plain keywords"
 {baseDir}/scripts/search.js --source x --x-from-date 2026-07-01 "what people say about ..."
-{baseDir}/scripts/fetch.js https://example.com        # --max-chars 50000 only for a deliberate deep read
+{baseDir}/scripts/fetch.js https://example.com        # a cut page ends with the --offset to continue from
 {baseDir}/scripts/map.js https://docs.example.com --limit 20
 ```
 
@@ -46,6 +46,7 @@ Default is web. `--source x` for what people are saying, a named account's posts
 
 - X posts: `auto` tries Direct first (free, main post with date). `--provider firecrawl` only for the thread or replies; about 30 credits per post.
 - Fetch only evidence that would change the conclusion: one or two URLs per turn, a representative post or two for experience reports, never re-fetch text you have. Reddit and YouTube return shells from every provider.
+- The same URL again within 15 minutes comes from a local cache (no provider call); a different `--provider` or `--no-cache` fetches anew.
 - When citing decisive evidence, record date, model version, client, and login method.
 
 ## Reading Results
@@ -53,9 +54,9 @@ Default is web. `--source x` for what people are saying, a named account's posts
 Every script prints one JSON object, also on failure (non-zero exit, stderr line).
 
 - `error`: read `error.message`, `error.code`, `diagnostics.provider_attempts`. Change something before retrying (query, `--provider`, `--model`). `DEADLINE_EXCEEDED`: the whole command hit its time budget (default 240s, `--deadline N`).
-- `diagnostics.warnings` and `diagnostics.provider_attempts` say which providers were skipped (e.g. Firecrawl in cooldown), failed, or produced content, and whether the relay served another model than requested.
+- A line starting with `[grok-search]` inside `content.text` or `answer.text` changes how to read it: the text was cut (the line says where the rest is), the page redirected to the site's home page, or the provider got no text. `diagnostics.warnings` repeats these and adds the rest: providers skipped (e.g. Firecrawl in cooldown) or failed, a relay serving another model than requested. `diagnostics.provider_attempts` lists each provider tried.
 - Search: `answer.text`, then `sources.items` (max 12; Grok's sources and Tavily/Firecrawl results share them, so a cited link may appear only in `answer.text`). `source_type` `citation` = used in the answer, `searched` = only listed; `opened: true` = Grok read the page. `sources.raw_path` always points to the run record (full list, answer, tool calls); read it in chunks only when the cards are not enough. Check `diagnostics.degraded`, `diagnostics.cost_usd`, and `diagnostics.search_budget` (advisory budget vs. calls made).
-- Fetch: `content.text`; if `content.truncated`, read `content.full_path` in chunks. stdout stays under 45KB whatever `--max-chars` says; a warning says when that cut the text. `metadata` has title/author/published_at when the provider had them. `diagnostics.run_path` is the run record.
+- Fetch: `content.text`, up to `--max-chars` characters (default 12000) from `--offset` (default 0); `content.chars` counts page text only. A cut page ends with a `[grok-search]` line giving the next `--offset` and `content.full_path`: continue from there instead of raising `--max-chars`. stdout stays under 45KB whatever `--max-chars` says. Non-HTML files come back as served (JSON re-indented). `metadata` has title/author/published_at when the provider had them. `diagnostics.run_path` is the run record.
 - Map: `urls`; fetch the few you need. A URL with a path maps that path and below, on that site only; map the site root for the whole site.
 
 Provider order, proxy, cooldown, config errors: `references/providers.md`. Multi-part or conflicting research: `references/planning.md` first.

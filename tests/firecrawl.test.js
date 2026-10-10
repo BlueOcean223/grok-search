@@ -243,14 +243,16 @@ await withServer(
     );
   },
   async (base) => {
+    // A notice, not only a warning: fetch.js opens content.text with it.
     const shell = await fetchUrl(`${base}/shell`, baseConfig, { provider: "direct" });
     assert.equal(shell.ok, true);
     assert.equal(shell.content, "# Reddit");
-    assert.equal(shell.warnings.some((warning) => /no text beyond the page title/.test(warning)), true);
+    assert.equal(shell.notices.some((notice) => /no text beyond the page title/.test(notice)), true);
 
     const page = await fetchUrl(`${base}/post`, baseConfig, { provider: "direct" });
     assert.equal(page.ok, true);
     assert.deepEqual(page.warnings, []);
+    assert.deepEqual(page.notices, []);
   }
 );
 

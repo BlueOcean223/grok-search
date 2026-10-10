@@ -74,7 +74,7 @@ Grok 明确额度耗尽且 extra sources 可用时，输出仍成功，但：
 ./scripts/fetch.js https://example.com
 ./scripts/fetch.js --provider firecrawl https://example.com
 ./scripts/fetch.js --provider direct https://example.com
-./scripts/fetch.js --max-chars 50000 https://example.com
+./scripts/fetch.js --offset 12000 https://example.com
 ```
 
 `auto` provider 顺序：
@@ -85,9 +85,13 @@ Direct（请求 Markdown）→ Firecrawl Scrape → Tavily Extract → 第一步
 
 Firecrawl 无 key 时走 Keyless；带 key 时自动发送 Bearer token。当前模式写入 `diagnostics.firecrawl_auth_mode`。
 
-第一步 Direct 带 `Accept: text/markdown` 请求，返回的不是 HTML 就原样采用，包括内容协商得到的 Markdown、纯文本文件和 JSON（记录里 153 个 HTML URL 有 45 个返回了 Markdown）。HTML 页先给 Firecrawl，失败、限流或目标页状态码 ≥ 400 时再给 Tavily。Firecrawl 在前的依据是 60 页对比：人工核对后 Tavily 约 20 页缺正文（GitHub issue 页全部缺评论），Firecrawl 1 页。X 页面让 Tavily 在前，因为 Firecrawl 抓一条约 30 credits。
+第一步 Direct 带 `Accept: text/markdown` 请求，返回的不是 HTML 就原样采用，包括内容协商得到的 Markdown、纯文本文件（逐字节保留）和 JSON（重新缩进）（记录里 153 个 HTML URL 有 45 个返回了 Markdown）。HTML 页先给 Firecrawl，失败、限流或目标页状态码 ≥ 400 时再给 Tavily。Firecrawl 在前的依据是 60 页对比：人工核对后 Tavily 约 20 页缺正文（GitHub issue 页全部缺评论），Firecrawl 1 页。X 页面让 Tavily 在前，因为 Firecrawl 抓一条约 30 credits。
 
-Firecrawl 返回的目标页状态码 ≥ 400 时按失败处理，交给下一个 provider（记录在案的 7 次都是错误页）。`final_url` / `redirected` 来自 Firecrawl 的 `metadata.url` 或 Direct 的最终响应；带路径的 URL 落在站点首页时写 warning（gov.cn 用脚本把已删除的页面跳回首页，Firecrawl 跟过去后报 200）。
+Firecrawl 返回的目标页状态码 ≥ 400 时按失败处理，交给下一个 provider（记录在案的 7 次都是错误页）。`final_url` / `redirected` 来自 Firecrawl 的 `metadata.url` 或 Direct 的最终响应；带路径的 URL 落在站点首页时，`content.text` 开头和 warnings 里都会写明（gov.cn 用脚本把已删除的页面跳回首页，Firecrawl 跟过去后报 200）。
+
+预览默认 12000 字符。正文被截断时，`content.text` 最后一行是 `[grok-search]` 提示，给出下一段的 `--offset` 和全文路径；跳到首页、Direct 只拿到标题、X 页面未通过校验也会在 `content.text` 开头写一行 `[grok-search]`。这些提示同时保留在 `diagnostics.warnings` 里，因为 agent 常常只打印 `content.text`。
+
+同一 URL 15 分钟内再抓读本地缓存（`<stateDir>/fetch-cache/`），不请求 provider：`auto` 只复用 `auto` 的结果，显式 provider 复用该 provider 的结果；失败不缓存，`--no-cache` 强制重抓，命中时有 `diagnostics.cache`。
 
 X 原帖在 `auto` 下不论 key 都先走 Direct（校验 handle、日期、正文；只有主帖）；要 thread、ISO 时间戳、互动数时显式 `--provider firecrawl`（约 30 credits）。单次 `credits_used >= 10` 会在 warnings 中说明成本。额度耗尽后进入冷却，auto 模式跳过 Firecrawl 直到 `retry_after_seconds` 到期。
 
@@ -135,13 +139,13 @@ Tavily Map 返回空列表时 `auto` 也交给 Direct Map；显式 `--provider t
 | `TAVILY_API_KEY` | Tavily Search/Extract/Map |
 | `FIRECRAWL_API_KEY` | 可选；提高 Firecrawl 限流并使用账户额度 |
 | `GROK_OUTPUT_DIR` | 完整输出与运行记录目录 |
-| `GROK_STATE_DIR` | 冷却状态目录，默认 `~/.cache/grok-search/` |
+| `GROK_STATE_DIR` | 冷却状态和 fetch 缓存目录，默认 `~/.cache/grok-search/` |
 | `GROK_RUN_LOG` | 默认开；`off` 关闭运行记录 |
 | `GROK_DEBUG_RAW` | `1` 时运行记录附带脱敏 Grok 原始响应 |
 | `GROK_PROXY` | 本工具专用代理 |
 
 ## 输出文件与边界
 
-长输出通过 `answer.full_path`、`content.full_path` 引用；整个 stdout JSON 不超过 45KB（`STDOUT_BUDGET_BYTES`，按 UTF-8 字节算，pi 的 bash 工具只保留最后 50KB），超出时截短 `answer.text` / `content.text` 并写 warning；每次调用的运行记录通过 `sources.raw_path`（search）或 `diagnostics.run_path`（fetch / map）引用。项目不实现登录、cookie 管理、CAPTCHA 绕过、代理池或本地浏览器自动化。
+长输出通过 `answer.full_path`、`content.full_path` 引用；整个 stdout JSON 不超过 45KB（`STDOUT_BUDGET_BYTES`，按 UTF-8 字节算，pi 的 bash 工具只保留最后 50KB），超出时截短 `answer.text` / `content.text`，正文末尾写一行 `[grok-search]` 提示并写 warning；每次调用的运行记录通过 `sources.raw_path`（search）或 `diagnostics.run_path`（fetch / map）引用。项目不实现登录、cookie 管理、CAPTCHA 绕过、代理池或本地浏览器自动化。
 
 相关阅读：[Responses 搜索协议](responses-mode.md)、[架构说明](architecture.md)。

@@ -106,7 +106,7 @@ Common configuration rules:
 - The old `responsesIncludeXSearch` / `GROK_RESPONSES_INCLUDE_X_SEARCH` option has been removed (deprecated 2026-08, removed 2026-09). A `true` value now fails with `CONFIG_OPTION_REMOVED` instead of silently dropping X search; switch to `searchSource: "both"`. `false` or absent is unaffected.
 - Precedence is CLI > environment > config file > built-in default. Note that you write the config file while the agent invoking this tool writes the CLI args: scalar settings such as `searchSource` are **defaults** the agent may override, and the value actually used is always recorded in `diagnostics.options`. Configured **restrictions**, however, are never silently discarded — allow-lists and deny-lists are both restrictions, and CLI values may only narrow them. Stepping outside one raises `RESPONSES_FILTER_FORBIDDEN`, emptying an allow-list raises `RESPONSES_FILTER_EMPTY`, and two deny-lists are merged rather than replaced. See [docs/responses-mode.md](docs/responses-mode.md#配置与命令行的优先级).
 - `responsesOpenRouterEngine` accepts `auto`, `native`, `exa`, `firecrawl`, `parallel`, or `perplexity`, and only applies when `apiProvider` is `openrouter`.
-- `tavilyApiKey` is optional. `firecrawlApiKey` may also be empty to use Firecrawl Keyless. An empty `outputDir` uses `~/.cache/grok-search/outputs/`; an empty `stateDir` uses `~/.cache/grok-search/` for the Firecrawl cooldown state. `runLog: false` disables the per-run record files.
+- `tavilyApiKey` is optional. `firecrawlApiKey` may also be empty to use Firecrawl Keyless. An empty `outputDir` uses `~/.cache/grok-search/outputs/`; an empty `stateDir` uses `~/.cache/grok-search/` for the Firecrawl cooldown state and the fetch cache. `runLog: false` disables the per-run record files.
 
 For OpenRouter, replace the core fields with:
 
@@ -182,7 +182,7 @@ Supported variables:
 | `FIRECRAWL_API_KEY` | `firecrawlApiKey` | No | `search.js`, `fetch.js` | Optional. Uses Firecrawl Keyless when absent; a key provides account-scoped credits and higher rate limits. |
 | `FIRECRAWL_API_URL` | `firecrawlApiUrl` | No | Firecrawl paths | Defaults to `https://api.firecrawl.dev/v2`. |
 | `GROK_OUTPUT_DIR` | `outputDir` | No | all scripts | Overrides long-output and run-record storage. Default: `~/.cache/grok-search/outputs/`. |
-| `GROK_STATE_DIR` | `stateDir` | No | all scripts | Cross-command state directory (Firecrawl quota cooldown file `firecrawl-cooldown.json`). Default: `~/.cache/grok-search/`. |
+| `GROK_STATE_DIR` | `stateDir` | No | all scripts | Cross-command state directory (Firecrawl quota cooldown file `firecrawl-cooldown.json`, the 15-minute fetch cache `fetch-cache/`). Default: `~/.cache/grok-search/`. |
 | `GROK_RUN_LOG` | `runLog` | No | all scripts | Default `true`: every command writes one run-record JSON. `off` / `false` disables it, and `sources.raw_path` / `diagnostics.run_path` become null. |
 | `GROK_DEBUG_RAW` | — | No | `search.js` | Env only. `1` embeds the redacted full Grok response as `grok_raw` in the run record (`--full-sources` does the same). |
 | `GROK_DEBUG` | — | No | all scripts | Env only. `true` prints retry/cleanup/proxy debug logs to stderr. |
@@ -298,11 +298,15 @@ Source cards intentionally do not include long `description` or `content` fields
 ./scripts/fetch.js --provider direct https://example.com
 ```
 
-Default fetch output is a 12,000-character preview. Use `--max-chars 50000` only for an explicit deep read after the preview is useful. Whatever `--max-chars` says, the whole JSON output stays under 45KB (pi's bash tool keeps only the last 50KB of output, so an oversized one-line text would be dropped whole): when the text does not fit, `content.text` keeps the beginning, `content.truncated` is true, the full text is in `content.full_path`, and `diagnostics.warnings` says so. Search `answer.text` works the same way.
+Default fetch output is a 12,000-character preview (`--max-chars` changes it). When the text is cut, the last line of `content.text` is a `[grok-search]` notice saying which characters are shown, which `--offset` gives the next part, and which file has the full text. To read on, continue with `--offset` rather than raising `--max-chars` and printing the start again. Whatever `--max-chars` says, the whole JSON output stays under 45KB (pi's bash tool keeps only the last 50KB of output, so an oversized one-line text would be dropped whole): when the text does not fit, `content.text` is cut further, `content.truncated` is true, and the full text is in `content.full_path`. Search `answer.text` works the same way; a cut answer ends with a line naming the full file.
 
 ```bash
-./scripts/fetch.js --max-chars 50000 https://example.com
+./scripts/fetch.js --offset 12000 https://example.com
 ```
+
+Fetching the same URL again within 15 minutes reads a local cache (`<stateDir>/fetch-cache/`) instead of calling a provider, after Claude Code WebFetch's 15-minute cache. `auto` reuses only what an earlier `auto` fetch returned; an explicit provider reuses results that provider produced, so switching provider still asks the new one. A hit sets `diagnostics.cache` to `{ hit, fetched_at, age_seconds }` and leaves `provider_attempts` empty. Failures are not cached; `--no-cache` fetches anew. The reason: in the sessions up to 2026-10-09, 12 of the 109 URLs fetched in a session were fetched again within about three minutes, because the agent filtered the same page with another script or wanted to see past the preview.
+
+Notices that change how the text should be read also open `content.text`: the page redirected to the site's home page, Direct got nothing beyond the title, an X page came back unvalidated. They stay in `diagnostics.warnings` too. Agents often print only `content.text`: up to 2026-10-09, Claude Code printed `diagnostics.warnings` once in about 105 calls.
 
 Provider order for `--provider auto`:
 
@@ -310,7 +314,7 @@ Provider order for `--provider auto`:
 Direct (asks for Markdown) -> Firecrawl Scrape -> Tavily Extract -> the Direct text from the first step
 ```
 
-The first step requests the page with `Accept: text/markdown, text/html;q=0.9, */*;q=0.8`, and anything that is not HTML is taken as served. Sites that negotiate content send the page as Markdown without navigation, for example code.claude.com, platform.openai.com and sites on Cloudflare's Markdown for Agents. Plain-text files and JSON APIs are also fetched in this step. Tried on 153 HTML URLs from the run records on 2026-10-10, 45 answered with Markdown.
+The first step requests the page with `Accept: text/markdown, text/html;q=0.9, */*;q=0.8`, and anything that is not HTML is taken as served (plain text byte for byte, JSON re-indented). Sites that negotiate content send the page as Markdown without navigation, for example code.claude.com, platform.openai.com and sites on Cloudflare's Markdown for Agents. Plain-text files and JSON APIs are also fetched in this step. Tried on 153 HTML URLs from the run records on 2026-10-10, 45 answered with Markdown.
 
 An HTML page goes to Firecrawl. If Firecrawl errors, reports a target status of 400 or more, returns nothing or is rate-limited (429), the page goes to Tavily. If both fail, the Direct text from the first step is returned without fetching again.
 
@@ -320,9 +324,9 @@ Firecrawl comes before Tavily because of a comparison on 2026-10-10: 60 HTML pag
 - Cost: Firecrawl charges 1 credit a page, Tavily basic 1 credit per 5 pages. Median time is 3.5 s for Firecrawl and 1.9 s for Tavily.
 - Volume: at the last 25 days' rate, about 146 fetches a month would reach Firecrawl.
 
-Direct Fetch strips simple HTML, formats JSON when possible, records redirects, and rejects binary, attachment and oversized responses.
+Direct Fetch strips simple HTML, formats JSON when possible, records redirects, and rejects binary, attachment and oversized responses; plain text comes back as served, so `content.full_path` is the file itself.
 
-Firecrawl reports the target page's status with its markdown: a page with a status of 400 or more counts as a failure and goes to the next provider (all seven on record from 2026-09-15 to 10-06 were 404/503 error pages). Firecrawl and Direct both report where the fetch ended in `final_url` / `redirected`; a URL with a path that ends on the site's home page adds a warning, because the page has most likely been removed (gov.cn, for one, sends removed pages to its home page by script).
+Firecrawl reports the target page's status with its markdown: a page with a status of 400 or more counts as a failure and goes to the next provider (all seven on record from 2026-09-15 to 10-06 were 404/503 error pages). Firecrawl and Direct both report where the fetch ended in `final_url` / `redirected`; a URL with a path that ends on the site's home page is noted at the start of `content.text` and in `diagnostics.warnings`, because the page has most likely been removed (gov.cn, for one, sends removed pages to its home page by script).
 
 Firecrawl Scrape uses Keyless without a key and automatically sends a Bearer token when `FIRECRAWL_API_KEY` is configured. The active mode is exposed as `diagnostics.firecrawl_auth_mode`.
 
@@ -330,7 +334,7 @@ X posts (`x.com/<handle>/status/<id>`) under `--provider auto` try Direct first 
 
 X redirects `/<anyhandle>/status/<id>` to the real handle; validation uses the redirected URL.
 
-Successful fetch output uses `content.text`, `content.chars`, `content.original_chars`, `content.truncated`, and `content.full_path`. `metadata` is normalized to `{ title, description, author, published_at, language, status, source_url }` from Firecrawl plus Direct's `status / content_type / content_length / content_disposition`. Provider details live under `diagnostics`, and the run record path under `diagnostics.run_path`.
+Successful fetch output uses `content.text`, `content.offset`, `content.chars` (page text only, not notices), `content.original_chars`, `content.truncated`, and `content.full_path`. `metadata` is normalized to `{ title, description, author, published_at, language, status, source_url }` from Firecrawl plus Direct's `status / content_type / content_length / content_disposition`. Provider details live under `diagnostics`, and the run record path under `diagnostics.run_path`.
 
 ## Map
 

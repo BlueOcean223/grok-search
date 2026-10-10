@@ -5,9 +5,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import {
   fitTextToStdoutBudget,
+  previewText,
   runRecordBase,
   STDOUT_BUDGET_BYTES,
   stdoutBytes,
+  withNotices,
   writeFullOutput,
   writeRunRecord,
   writeRunRecordSync,
@@ -78,7 +80,7 @@ try {
     output.content.truncated = true;
     output.diagnostics.warnings.push("cut");
   });
-  assert.equal(cut, true);
+  assert.equal(cut, output.content.text);
   assert.equal(calls, 1);
   assert.equal(output.content.truncated, true);
   assert.ok(stdoutBytes(output) <= STDOUT_BUDGET_BYTES);
@@ -86,19 +88,56 @@ try {
   assert.ok(text.startsWith(output.content.text));
 }
 
+// compose wraps the text in notices that survive the cut; it sees the state onCut leaves and
+// the kept text, so a tail can say where the cut fell.
+{
+  const text = "z".repeat(60_000);
+  const output = { content: { text, truncated: false }, diagnostics: { warnings: [] } };
+  const compose = (shown) =>
+    withNotices(shown, { lead: ["lead notice"], tail: output.content.truncated ? [`cut at ${shown.length}`] : [] });
+  const kept = await fitTextToStdoutBudget(output, output.content, "text", async () => {
+    output.content.truncated = true;
+  }, { compose });
+  assert.ok(kept.length < 60_000);
+  assert.equal(output.content.text, `[grok-search] lead notice\n\n${kept}\n\n[grok-search] cut at ${kept.length}`);
+  assert.ok(stdoutBytes(output) <= STDOUT_BUDGET_BYTES);
+
+  // Within budget, compose still applies.
+  const small = { content: { text: "body" } };
+  assert.equal(await fitTextToStdoutBudget(small, small.content, "text", async () => assert.fail("onCut"), { compose: (shown) => withNotices(shown, { tail: ["end"] }) }), null);
+  assert.equal(small.content.text, "body\n\n[grok-search] end");
+}
+
+// previewText: --max-chars characters from --offset; anything short of the whole text is saved.
+{
+  const whole = await previewText(config, { kind: "fetch", provider: "direct", label: "p", content: "abcdef", maxChars: 10 });
+  assert.deepEqual({ ...whole }, { preview: "abcdef", truncated: false, offset: 0, original_length: 6, full_output_path: null });
+  const middle = await previewText(config, { kind: "fetch", provider: "direct", label: "p", content: "abcdef", maxChars: 2, offset: 2 });
+  assert.equal(middle.preview, "cd");
+  assert.equal(middle.offset, 2);
+  assert.equal(middle.truncated, true);
+  assert.equal(await readFile(middle.full_output_path, "utf8"), "abcdef");
+  const rest = await previewText(config, { kind: "fetch", provider: "direct", label: "p", content: "abcdef", maxChars: 100, offset: 4 });
+  assert.equal(rest.preview, "ef");
+  assert.equal(rest.truncated, true);
+  const past = await previewText(config, { kind: "fetch", provider: "direct", label: "p", content: "abcdef", maxChars: 100, offset: 99 });
+  assert.equal(past.preview, "");
+  assert.equal(past.offset, 6);
+}
+
 // Already within budget: untouched, onCut not called.
 {
   const output = { answer: { text: "short" } };
   const cut = await fitTextToStdoutBudget(output, output.answer, "text", async () => assert.fail("onCut"));
-  assert.equal(cut, false);
+  assert.equal(cut, null);
   assert.equal(output.answer.text, "short");
 }
 
 // The rest alone exceeds the budget (e.g. --full-sources): cutting would not help, so keep the text.
 {
   const output = { answer: { text: "x".repeat(500) }, raw: "y".repeat(5000) };
-  const cut = await fitTextToStdoutBudget(output, output.answer, "text", async () => assert.fail("onCut"), 2000);
-  assert.equal(cut, false);
+  const cut = await fitTextToStdoutBudget(output, output.answer, "text", async () => assert.fail("onCut"), { budget: 2000 });
+  assert.equal(cut, null);
   assert.equal(output.answer.text.length, 500);
 }
 

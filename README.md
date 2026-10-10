@@ -106,7 +106,7 @@ chmod 600 ~/.config/grok-search/config.json
 - 旧配置项 `responsesIncludeXSearch` / `GROK_RESPONSES_INCLUDE_X_SEARCH` 已移除（2026-08 弃用，2026-09 删除）。值为 `true` 时命令直接报 `CONFIG_OPTION_REMOVED` 而不是静默丢掉 X 检索，请改为 `searchSource: "both"`；`false` 或缺失不受影响。
 - 优先级为 命令行 > 环境变量 > 配置文件 > 默认值。注意配置文件由你书写、命令行参数由调用本工具的 agent 书写：标量配置（如 `searchSource`）是**默认值**，agent 可以覆盖，实际生效值见 `diagnostics.options`；但配置里的**限制**不会被静默抹掉——allow-list 与 deny-list 都是限制，命令行只能收紧不能放宽。越界报 `RESPONSES_FILTER_FORBIDDEN`，把 allow-list 减空报 `RESPONSES_FILTER_EMPTY`，两个 deny-list 合并而非替换。规则见 [docs/responses-mode.md](docs/responses-mode.md#配置与命令行的优先级)。
 - `responsesOpenRouterEngine` 可选 `auto`、`native`、`exa`、`firecrawl`、`parallel` 或 `perplexity`，仅在 `apiProvider` 为 `openrouter` 时生效。
-- `tavilyApiKey` 可留空；`firecrawlApiKey` 也可留空并使用 Firecrawl Keyless。`outputDir` 留空时使用默认目录 `~/.cache/grok-search/outputs/`；`stateDir` 留空时使用 `~/.cache/grok-search/`，存放 Firecrawl 冷却状态；`runLog: false` 关闭每次调用的运行记录落盘。
+- `tavilyApiKey` 可留空；`firecrawlApiKey` 也可留空并使用 Firecrawl Keyless。`outputDir` 留空时使用默认目录 `~/.cache/grok-search/outputs/`；`stateDir` 留空时使用 `~/.cache/grok-search/`，存放 Firecrawl 冷却状态和 fetch 缓存；`runLog: false` 关闭每次调用的运行记录落盘。
 
 如果使用 OpenRouter，核心字段可改为：
 
@@ -175,7 +175,7 @@ Node 原生 `fetch` 默认不会可靠读取终端代理变量。本项目会在
 | `FIRECRAWL_API_KEY` | `firecrawlApiKey` | 否 | `search.js`、`fetch.js` | 可选。未配置时使用 Firecrawl Keyless；配置后使用独立账户额度和更高限流。 |
 | `FIRECRAWL_API_URL` | `firecrawlApiUrl` | 否 | Firecrawl 路径 | 默认 `https://api.firecrawl.dev/v2`。 |
 | `GROK_OUTPUT_DIR` | `outputDir` | 否 | 所有脚本 | 覆盖长输出与运行记录的落盘目录。默认 `~/.cache/grok-search/outputs/`。 |
-| `GROK_STATE_DIR` | `stateDir` | 否 | 所有脚本 | 跨命令状态目录（Firecrawl 额度冷却文件 `firecrawl-cooldown.json`）。默认 `~/.cache/grok-search/`。 |
+| `GROK_STATE_DIR` | `stateDir` | 否 | 所有脚本 | 跨命令状态目录（Firecrawl 额度冷却文件 `firecrawl-cooldown.json`、15 分钟的 fetch 缓存 `fetch-cache/`）。默认 `~/.cache/grok-search/`。 |
 | `GROK_RUN_LOG` | `runLog` | 否 | 所有脚本 | 默认 `true`，每次调用写一份运行记录 JSON；`off` / `false` 关闭后 `sources.raw_path` / `diagnostics.run_path` 为 null。 |
 | `GROK_DEBUG_RAW` | — | 否 | `search.js` | 仅环境变量。设为 `1` 时把脱敏后的完整 Grok 响应作为 `grok_raw` 写进运行记录（`--full-sources` 亦然）。 |
 | `GROK_DEBUG` | — | 否 | 所有脚本 | 仅环境变量。设为 `true` 时把重试 / 清理 / 代理调试日志写到 stderr。 |
@@ -291,11 +291,15 @@ Source card 不再输出长 `description` 或 `content` 字段，只输出短 `s
 ./scripts/fetch.js --provider direct https://example.com
 ```
 
-fetch 默认只返回 12,000 字符 preview。`--max-chars 50000` 应作为看过 preview 后的显式深读使用，不是常规默认。不管 `--max-chars` 设多大，整个 JSON 输出都不超过 45KB（pi 的 bash 工具只保留输出最后 50KB，超长的单行正文会整行丢掉）：放不下时 `content.text` 只留开头，`content.truncated` 为 true，全文在 `content.full_path`，`diagnostics.warnings` 里有说明。search 的 `answer.text` 同理。
+fetch 默认只返回 12,000 字符 preview（`--max-chars` 调整）。正文被截断时，`content.text` 最后一行是 `[grok-search]` 开头的提示，写明显示的是第几到第几个字符、下一段用哪个 `--offset`、全文在哪个文件。要往下读，用 `--offset` 接着读，不要加大 `--max-chars` 把开头重新打印一遍。不管 `--max-chars` 设多大，整个 JSON 输出都不超过 45KB（pi 的 bash 工具只保留输出最后 50KB，超长的单行正文会整行丢掉）：放不下时 `content.text` 再截短，`content.truncated` 为 true，全文在 `content.full_path`。search 的 `answer.text` 同理，被截断时最后一行写明全文路径。
 
 ```bash
-./scripts/fetch.js --max-chars 50000 https://example.com
+./scripts/fetch.js --offset 12000 https://example.com
 ```
+
+同一个 URL 在 15 分钟内再抓，直接读本地缓存（`<stateDir>/fetch-cache/`），不再请求 provider，参照 Claude Code WebFetch 的 15 分钟缓存。`auto` 只复用之前 `auto` 抓到的结果；显式指定 provider 时，复用该 provider 产出的结果，所以换 provider 重抓仍会真的去请求新的 provider。命中时 `diagnostics.cache` 为 `{ hit, fetched_at, age_seconds }`，`provider_attempts` 为空。失败的结果不缓存；`--no-cache` 强制重抓。依据：截至 2026-10-09 的会话里，各会话抓过的 109 个 URL 中有 12 个在约三分钟内又被抓了一次，原因是 agent 用不同的脚本过滤同一页，或者想看 preview 之后的内容。
+
+会改变正文读法的提示也写进 `content.text` 开头：跳到站点首页、Direct 只拿到标题、X 页面未通过校验就原样返回。这些提示同时保留在 `diagnostics.warnings` 里。原因是 agent 常常只打印 `content.text`：截至 2026-10-09，Claude Code 里约 105 次调用只打印过 1 次 `diagnostics.warnings`。
 
 `--provider auto` 的 provider 顺序：
 
@@ -303,7 +307,7 @@ fetch 默认只返回 12,000 字符 preview。`--max-chars 50000` 应作为看�
 Direct（请求 Markdown）-> Firecrawl Scrape -> Tavily Extract -> 第一步拿到的 Direct 文本
 ```
 
-第一步 Direct 用 `Accept: text/markdown, text/html;q=0.9, */*;q=0.8` 请求页面，返回的不是 HTML 就原样采用。支持内容协商的站点会直接给出不带导航的 Markdown，例如 code.claude.com、platform.openai.com，以及接入 Cloudflare Markdown for Agents 的站点。纯文本文件、JSON 接口也在这一步拿到。2026-10-10 用记录里的 153 个 HTML URL 试过，45 个返回了 Markdown。
+第一步 Direct 用 `Accept: text/markdown, text/html;q=0.9, */*;q=0.8` 请求页面，返回的不是 HTML 就原样采用（纯文本逐字节保留，JSON 重新缩进）。支持内容协商的站点会直接给出不带导航的 Markdown，例如 code.claude.com、platform.openai.com，以及接入 Cloudflare Markdown for Agents 的站点。纯文本文件、JSON 接口也在这一步拿到。2026-10-10 用记录里的 153 个 HTML URL 试过，45 个返回了 Markdown。
 
 返回 HTML 的页面交给 Firecrawl。它出错、目标页状态码 ≥ 400、内容为空或被限流（429）时，再交给 Tavily。两家都失败时，用第一步已经拿到的 Direct 文本，不再重复请求。
 
@@ -313,9 +317,9 @@ Firecrawl 排在 Tavily 前面，依据是 2026-10-10 的对比：从运行记�
 - 代价：Firecrawl 每页 1 credit，Tavily basic 每 5 页 1 credit；耗时中位数 Firecrawl 3.5 秒，Tavily 1.9 秒。
 - 用量：按过去 25 天的调用量估算，每月约 146 次抓取会走到 Firecrawl。
 
-Direct Fetch 会做简单的 HTML 清理、尽量格式化 JSON、记录重定向，并拒绝二进制、附件和超大响应。
+Direct Fetch 会做简单的 HTML 清理、尽量格式化 JSON、记录重定向，并拒绝二进制、附件和超大响应；纯文本按原样返回，`content.full_path` 就是原文件。
 
-Firecrawl 会把目标页的状态码一并返回：状态码 ≥ 400 的页面按失败处理，交给下一个 provider（2026-09-15 至 10-06 记录在案的 7 次全是 404 / 503 错误页）。Firecrawl 和 Direct 都会把最终 URL 写进 `final_url` / `redirected`；带路径的 URL 最终落在站点首页时写一条 warning，这种情况多半是页面已删除（例如 gov.cn 用脚本把已删除的页面跳回首页）。
+Firecrawl 会把目标页的状态码一并返回：状态码 ≥ 400 的页面按失败处理，交给下一个 provider（2026-09-15 至 10-06 记录在案的 7 次全是 404 / 503 错误页）。Firecrawl 和 Direct 都会把最终 URL 写进 `final_url` / `redirected`；带路径的 URL 最终落在站点首页时，`content.text` 开头和 `diagnostics.warnings` 里都会写明，这种情况多半是页面已删除（例如 gov.cn 用脚本把已删除的页面跳回首页）。
 
 Firecrawl Scrape 无 key 时会使用 Keyless；配置 `FIRECRAWL_API_KEY` 后会自动发送 Bearer token。当前认证模式写入 `diagnostics.firecrawl_auth_mode`。
 
@@ -323,7 +327,7 @@ X 原帖（`x.com/<handle>/status/<id>`）在 `--provider auto` 下不论是否�
 
 X 会把 `/<任意handle>/status/<id>` 重定向到真实 handle，校验按重定向后的 URL 进行。
 
-fetch 成功输出使用 `content.text`、`content.chars`、`content.original_chars`、`content.truncated`、`content.full_path`，`metadata` 归一为 `{ title, description, author, published_at, language, status, source_url }`（Firecrawl）加 Direct 的 `status / content_type / content_length / content_disposition`，provider 相关信息放在 `diagnostics`，运行记录路径在 `diagnostics.run_path`。
+fetch 成功输出使用 `content.text`、`content.offset`、`content.chars`（只算正文，不含提示行）、`content.original_chars`、`content.truncated`、`content.full_path`，`metadata` 归一为 `{ title, description, author, published_at, language, status, source_url }`（Firecrawl）加 Direct 的 `status / content_type / content_length / content_disposition`，provider 相关信息放在 `diagnostics`，运行记录路径在 `diagnostics.run_path`。
 
 ## Map
 

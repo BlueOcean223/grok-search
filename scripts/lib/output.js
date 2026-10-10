@@ -158,11 +158,15 @@ export function writeRunRecordSync(config, { kind, label, record }) {
   }
 }
 
-export async function previewText(config, { kind, provider, label, content, maxChars, extension = "txt" }) {
+/** Up to `maxChars` characters from `offset`; anything less than the whole text also goes to a file. */
+export async function previewText(config, { kind, provider, label, content, maxChars, offset = 0, extension = "txt" }) {
   const text = String(content ?? "");
+  const start = Math.min(Math.max(0, offset), text.length);
   const limit = Number.isFinite(maxChars) ? Math.max(0, maxChars) : text.length;
-  const truncated = text.length > limit;
-  const preview = truncated ? text.slice(0, limit).trimEnd() : text;
+  const end = Math.min(text.length, start + limit);
+  const truncated = start > 0 || end < text.length;
+  const slice = text.slice(start, end);
+  const preview = end < text.length ? slice.trimEnd() : slice;
   const fullOutputPath = truncated
     ? await writeFullOutput(config, { kind, provider, label, content: text, extension })
     : null;
@@ -170,9 +174,21 @@ export async function previewText(config, { kind, provider, label, content, maxC
   return {
     preview,
     truncated,
+    offset: start,
     original_length: text.length,
     full_output_path: fullOutputPath,
   };
+}
+
+/**
+ * Text with `[grok-search]` lines before and after it. Agents often print only `content.text`
+ * or `answer.text`: in Claude Code sessions up to 2026-10-09 the JSON went through a one-line
+ * script in most calls and `diagnostics.warnings` was printed once in about 105. So what changes
+ * how the text should be read is said inside it, as MCP's fetch server does when it truncates.
+ */
+export function withNotices(text, { lead = [], tail = [] } = {}) {
+  const line = (message) => `[grok-search] ${message}`;
+  return [...lead.map(line), text, ...tail.map(line)].filter(Boolean).join("\n\n");
 }
 
 // Agent shell tools cap what a command may print. pi's bash keeps the last 50KB in whole lines,
@@ -188,19 +204,21 @@ export function stdoutBytes(value) {
 }
 
 /**
- * Shrink the string at `holder[key]` from the end until `output` prints within `budget` bytes.
- * `onCut` runs once before shrinking to record where the full text lives (it may write a file and
- * add a warning). Leaves everything untouched when `output` already fits, or when it would not fit
- * even with an empty string: cutting would then lose text without saving the rest.
- * Returns whether it cut.
+ * Set `holder[key]` to `compose(text)` and, when `output` then prints over `budget` bytes, shrink
+ * `text` from the end until it fits. `compose` adds what must survive the cut (notices) and is
+ * called again after `onCut`, which runs once before shrinking to record where the full text lives
+ * (it may write a file and add a warning). Nothing is cut when `output` already fits, or when it
+ * would not fit even with an empty text: cutting would then lose text without saving the rest.
+ * Returns the part of `text` kept, or null when nothing was cut.
  */
-export async function fitTextToStdoutBudget(output, holder, key, onCut, budget = STDOUT_BUDGET_BYTES) {
-  if (stdoutBytes(output) <= budget) return false;
+export async function fitTextToStdoutBudget(output, holder, key, onCut, { budget = STDOUT_BUDGET_BYTES, compose = (text) => text } = {}) {
   const original = String(holder[key] ?? "");
-  holder[key] = "";
+  holder[key] = compose(original);
+  if (stdoutBytes(output) <= budget) return null;
+  holder[key] = compose("");
   const fitsEmpty = stdoutBytes(output) + CUT_RESERVE_BYTES <= budget;
-  holder[key] = original;
-  if (!fitsEmpty) return false;
+  holder[key] = compose(original);
+  if (!fitsEmpty) return null;
 
   await onCut();
   const cut = (chars) => original.slice(0, chars).trimEnd();
@@ -208,12 +226,13 @@ export async function fitTextToStdoutBudget(output, holder, key, onCut, budget =
   let overflows = original.length;
   while (overflows - fits > 1) {
     const mid = Math.floor((fits + overflows) / 2);
-    holder[key] = cut(mid);
+    holder[key] = compose(cut(mid));
     if (stdoutBytes(output) <= budget) fits = mid;
     else overflows = mid;
   }
-  holder[key] = cut(fits);
-  return true;
+  const kept = cut(fits);
+  holder[key] = compose(kept);
+  return kept;
 }
 
 export function jsonReplacer(_key, value) {

@@ -19,6 +19,7 @@ import {
   runRecordBase,
   runRecordPath,
   STDOUT_BUDGET_BYTES,
+  withNotices,
   writeFullOutput,
   writeRunRecord,
   writeRunRecordSync,
@@ -1036,20 +1037,33 @@ async function publicResult(args, config) {
   };
   // `--max-chars` counts characters; what the agent's shell keeps is bytes of the whole JSON.
   // With `--full-sources` the raw payload alone can exceed the budget; then nothing is cut.
-  const cut = await fitTextToStdoutBudget(output, output.answer, "text", async () => {
-    output.answer.full_path ??= await writeFullOutput(config, {
-      kind: "search",
-      provider: degraded ? "search-fallback" : "grok-responses",
-      label: args.query,
-      content: grok.answer,
-      extension: "md",
+  // A cut answer ends with a line saying so, for agents that print only answer.text.
+  const compose = (text) =>
+    withNotices(text, {
+      tail: output.answer.truncated
+        ? [`The answer was cut at ${text.length} of ${output.answer.original_chars} characters; the full answer is in ${output.answer.full_path}.`]
+        : [],
     });
-    output.answer.truncated = true;
-    warnings.push(
-      `answer.text keeps only the beginning so the whole output stays under ${STDOUT_BUDGET_BYTES / 1024}KB (agent shell tools cut longer output); the full text is in answer.full_path, read it in chunks.`
-    );
-  });
-  if (cut) output.answer.chars = output.answer.text.length;
+  const kept = await fitTextToStdoutBudget(
+    output,
+    output.answer,
+    "text",
+    async () => {
+      output.answer.full_path ??= await writeFullOutput(config, {
+        kind: "search",
+        provider: degraded ? "search-fallback" : "grok-responses",
+        label: args.query,
+        content: grok.answer,
+        extension: "md",
+      });
+      output.answer.truncated = true;
+      warnings.push(
+        `answer.text keeps only the beginning so the whole output stays under ${STDOUT_BUDGET_BYTES / 1024}KB (agent shell tools cut longer output); the full text is in answer.full_path, read it in chunks.`
+      );
+    },
+    { compose }
+  );
+  if (kept != null) output.answer.chars = kept.length;
 
   const written = await writeRunRecord(config, {
     at: runPath,
