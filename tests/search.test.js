@@ -237,6 +237,24 @@ const firecrawlOk = async (query, limit) => ({
   assert.equal(output.diagnostics.search_budget.prompt_x, 4);
 }
 
+// An X search that read no posts under a date window or a handle list says so: the filter, not
+// the search, is the likely reason (@nodejs's last post was 2026-08-27; --x-from-date 2026-09-01
+// read nothing on 2026-10-11).
+{
+  const xUsage = (fetched) => ({ ...responsesBody, usage: { ...responsesBody.usage, server_side_tool_usage_details: { x_search_calls: 3, x_posts_fetched: fetched } } });
+  const run = (args, body) => runSearch({ ...baseArgs, searchSource: "x", ...args }, config, { grok: grokFromFixture(body), tavily: tavilyOk, firecrawl: firecrawlOk });
+  const filterWarnings = (output) => output.diagnostics.warnings.filter((line) => line.startsWith("X search read no posts"));
+
+  assert.deepEqual(filterWarnings(await run({ xFromDate: "2026-09-01" }, xUsage(0))), [
+    "X search read no posts under --x-from-date 2026-09-01; the accounts may have nothing there. Widen the dates or drop the handle filter and retry.",
+  ]);
+  assert.match(filterWarnings(await run({ xToDate: "2026-09-30", responsesAllowedXHandles: ["nodejs"] }, xUsage(0)))[0], /--x-to-date 2026-09-30 --responses-allowed-x-handles nodejs;/);
+  // Posts were read, no filter was set, or the relay reports no usage details: nothing to say.
+  assert.deepEqual(filterWarnings(await run({ xFromDate: "2026-09-01" }, xUsage(4))), []);
+  assert.deepEqual(filterWarnings(await run({}, xUsage(0))), []);
+  assert.deepEqual(filterWarnings(await run({ xFromDate: "2026-09-01" }, responsesBody)), []);
+}
+
 await rm(outputDir, { recursive: true, force: true });
 await rm(stateDir, { recursive: true, force: true });
 console.log("search fixtures ok");

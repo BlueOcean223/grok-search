@@ -237,7 +237,7 @@ OpenRouter 使用 `openrouter:web_search` server tool，不会给模型名追加
 ./scripts/search.js --source x --x-images "query"               # 分析帖子中的图片
 ```
 
-- `x_search` 支持 handle allow/deny（互斥，各上限 20）、`--x-from-date` / `--x-to-date`（`YYYY-MM-DD`）、`--x-images` / `--x-videos`（默认关闭，按 token 额外计费；`--no-x-images` / `--no-x-videos` 可关掉配置里打开的开关）。
+- `x_search` 支持 handle allow/deny（互斥，各上限 20）、`--x-from-date` / `--x-to-date`（`YYYY-MM-DD`）、`--x-images` / `--x-videos`（默认关闭，按 token 额外计费；`--no-x-images` / `--no-x-videos` 可关掉配置里打开的开关）。带日期窗口或 handle 过滤的检索一条帖子都没读到时（`usage.server_side_tool_usage_details.x_posts_fetched` 为 0），`diagnostics.warnings` 会指出是哪个过滤条件，建议放宽重试；账号在该时间段没发帖时结果就是空的，不是检索失败。
 - **命令行**的 X 过滤参数会把未显式指定的 `--source` 提升为 `both`；与显式 `--source web` 同时出现则报 `SEARCH_SOURCE_CONFLICT`。配置文件里的 X 过滤项只在 X 检索开启时生效，不会自己把档位提升上去。
 - `--responses-x-search` 保留为 `--source both` 的别名。
 - X 检索计费 $5 / 1k calls，与 web search 同价，实际次数见 `diagnostics.responses_x_search_calls`。

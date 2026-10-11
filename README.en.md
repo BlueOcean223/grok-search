@@ -244,7 +244,7 @@ On success, provider attempts, warnings, timestamps, and command options live un
 ./scripts/search.js --source x --x-images "query"                  # analyze post images
 ```
 
-- `x_search` supports handle allow/deny lists (mutually exclusive, max 20 each), `--x-from-date` / `--x-to-date` (`YYYY-MM-DD`), and `--x-images` / `--x-videos` (off by default, billed as extra tokens; `--no-x-images` / `--no-x-videos` turn off what the config enabled).
+- `x_search` supports handle allow/deny lists (mutually exclusive, max 20 each), `--x-from-date` / `--x-to-date` (`YYYY-MM-DD`), and `--x-images` / `--x-videos` (off by default, billed as extra tokens; `--no-x-images` / `--no-x-videos` turn off what the config enabled). When a search with a date window or a handle list read no posts at all (`usage.server_side_tool_usage_details.x_posts_fetched` is 0), `diagnostics.warnings` names the filter and suggests widening it; an account that posted nothing in the window gives an empty result, not a failed search.
 - A **command-line** X filter promotes an unspecified `--source` to `both`; combining one with an explicit `--source web` raises `SEARCH_SOURCE_CONFLICT`. X filters in the config file only apply once X search is on — they never switch it on by themselves.
 - `--responses-x-search` remains an alias for `--source both`.
 - X search is billed at $5 per 1k calls, the same rate as web search. See `diagnostics.responses_x_search_calls` for the actual count.

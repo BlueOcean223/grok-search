@@ -644,6 +644,24 @@ function searchBudget(searchSource, diagnostics, toolCalls) {
  * calls come back as `tool_calls` for the run record. Throws GROK_RESPONSES_EMPTY, the same
  * diagnostics attached, when the body carries no answer text.
  */
+/**
+ * Why an X search came back empty, when its filters explain it. `x_posts_fetched` (xAI usage)
+ * counts the posts the searches read; zero under a date window or a handle list usually means
+ * the accounts posted nothing there: @nodejs's last post was 2026-08-27, and --x-from-date
+ * 2026-09-01 read nothing on 2026-10-11, which looked like a broken search.
+ */
+function xFilterWarnings(options, diagnostics) {
+  const details = diagnostics.usage?.server_side_tool_usage_details;
+  if (!isPlainObject(details) || numericField(details.x_posts_fetched) !== 0 || !numericField(details.x_search_calls)) return [];
+  const filters = [
+    ...(options.xFromDate ? [`--x-from-date ${options.xFromDate}`] : []),
+    ...(options.xToDate ? [`--x-to-date ${options.xToDate}`] : []),
+    ...(options.allowedXHandles?.length ? [`--responses-allowed-x-handles ${options.allowedXHandles.join(",")}`] : []),
+  ];
+  if (!filters.length) return [];
+  return [`X search read no posts under ${filters.join(" ")}; the accounts may have nothing there. Widen the dates or drop the handle filter and retry.`];
+}
+
 export function grokSearchResult(data, options, config, { requests = 1 } = {}) {
   const defaultTool =
     config.apiProvider === "openrouter" ? "openrouter:web_search" : options.searchSource === "x" ? "x_search" : "web_search";
@@ -654,9 +672,10 @@ export function grokSearchResult(data, options, config, { requests = 1 } = {}) {
     responses_tool_calls: toolCalls,
     responses_tool_call_total: total,
     responses_tool_call_counts: counts,
-    warnings,
+    warnings: parsedWarnings,
     ...rest
   } = parsed.diagnostics;
+  const warnings = [...parsedWarnings, ...xFilterWarnings(options, rest)];
   const diagnostics = {
     ...rest,
     responses_tool_calls: summarizeToolCalls(toolCalls, total, counts),

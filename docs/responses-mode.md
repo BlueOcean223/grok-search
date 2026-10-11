@@ -60,6 +60,8 @@
 ./scripts/search.js --source x --x-from-date 2026-08-01 --x-to-date 2026-08-16 "query"
 ```
 
+日期窗口或 handle 过滤下一条帖子都没读到（`x_posts_fetched` 为 0）时，`diagnostics.warnings` 会点名过滤条件并建议放宽：2026-10-11 用 `--x-from-date 2026-09-01` 查 @nodejs 返回空，其实是该账号最后一帖在 08-27，三家 provider 去掉日期都能搜到。
+
 `x_search` 的过滤参数放在 tool 对象上（不是 `filters`）：
 
 ```json

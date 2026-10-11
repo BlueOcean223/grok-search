@@ -37,7 +37,7 @@ Query rules:
 
 Default is web. `--source x` for what people are saying, a named account's posts, a thread, or a claim only circulating on X. `--source both` for a current event where reporting and reaction both matter. `--source x` cannot fall back to the web and turns Tavily/Firecrawl off (`--extra N` forces them).
 
-- For "is it available now / current state" questions, start with `--x-from-date` 60–90 days back; widen only if empty. Old issues explain history, not the present.
+- For "is it available now / current state" questions, start with `--x-from-date` 60–90 days back; widen only if empty (`diagnostics.warnings` says when the window read no posts). Old issues explain history, not the present.
 - X posts are personal statements: cite handle and date (both live in `answer.text`, not the card), keep claims separate from confirmations, confirm facts at the official source.
 - Cost: when an X search reports `responses_tool_calls.total` above 6, add `--responses-parallel-tool-calls false` next time: one call per turn, so `max_turns` caps the count; below 6 it saves nothing.
 - Handle filters, dates, media flags, card fields: `references/x-search.md`.
