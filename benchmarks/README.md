@@ -33,8 +33,10 @@ plus a summary to `--out DIR` (default under `benchmarks/results/`, ignored by G
 decisions are kept in the local-only `.agent/` notes.
 
 - `provider-compare.mjs`: the same questions, URLs and sites through Grok, Tavily, Firecrawl and
-  Direct (`--part search|fetch|map|all`). Used on 2026-09-08 to decide X-post routing
-  (Direct first) and to turn extras off for `--source x`.
+  Direct (`--part search|fetch|map|all`). Its search part reads the Tavily/Firecrawl results
+  search.js returned beside Grok, which were removed on 2026-10-19; only fetch and map still run
+  as designed. Used on 2026-09-08 to decide X-post routing (Direct first) and to turn extras off
+  for `--source x`.
 - `deepseek-compare.mjs`: DeepSeek Search / Fetch (opened 2026-10-17) against Tavily, Firecrawl
   and Direct on the same queries and URLs, and deepseek-v4-pro with its server-side `web_search`
   against `search.js` on 13 current-fact questions (`--part search|fetch|answer`, `--repeat N`).

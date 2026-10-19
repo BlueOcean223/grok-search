@@ -8,7 +8,7 @@ await runCommand({
   options: SEARCH_OPTIONS,
   positional: SEARCH_POSITIONAL,
   finish: finishSearchArgs,
-  intro: "Run a Responses-compatible Grok/OpenRouter search and return JSON with independent Tavily/Firecrawl sources.",
+  intro: "Run a Responses-compatible Grok/OpenRouter search and return JSON with the answer and its source cards.",
   environment: `  GROK_API_URL         Responses-compatible base URL; required
   GROK_API_KEY         API key for GROK_API_URL; required
   GROK_API_PROVIDER    Optional provider: xai, openrouter, or openai-compatible
@@ -18,13 +18,10 @@ await runCommand({
                        Optional Responses max_turns; default 3
   GROK_RESPONSES_PARALLEL_TOOL_CALLS
                        Optional true|false; false makes Grok search one call per turn. Not sent unless set
-  GROK_DEFAULT_EXTRA   Optional total Tavily/Firecrawl source count; default 6
   GROK_SOURCE_CHARS    Optional source snippet size; default 400
   GROK_MAX_SOURCES     Optional cap on returned source cards; default 12
   GROK_DEADLINE_SECONDS
                        Optional whole-command deadline; default 240, 0 disables
-  TAVILY_API_KEY       Optional Tavily parallel source provider
-  FIRECRAWL_API_KEY    Optional Firecrawl key; keyless search works without it
   GROK_OUTPUT_DIR      Optional directory for full answer when preview is truncated`,
   label: (args) => args.query,
   errorRecord: searchErrorRecord,

@@ -19,9 +19,9 @@ Run the fewest commands that answer the question; run independent sub-questions 
 ## Commands
 
 ```bash
-{baseDir}/scripts/search.js "plain keywords"
-{baseDir}/scripts/search.js --instructions "what to return, language, what to leave out" "plain keywords"
-{baseDir}/scripts/search.js --responses-allowed-domains github.com "plain keywords"
+{baseDir}/scripts/search.js "the question, with what to return"
+{baseDir}/scripts/search.js --instructions "format, language, what to leave out" "the question"
+{baseDir}/scripts/search.js --responses-allowed-domains github.com "the question"
 {baseDir}/scripts/search.js --source x --x-from-date 2026-07-01 "what people say about ..."
 {baseDir}/scripts/fetch.js https://example.com        # a cut page ends with the --offset to continue from
 {baseDir}/scripts/map.js https://docs.example.com --limit 20
@@ -29,13 +29,13 @@ Run the fewest commands that answer the question; run independent sub-questions 
 
 Query rules:
 
-- The query is a keyword string that Tavily/Firecrawl search verbatim, so keep it short. Everything else (fields wanted, language, "quote and date only, no advice, say if not found") goes in `--instructions`; only Grok sees it. A bag of keywords like `GPT Codex 1M 272k context window` makes Grok invent background; `codex context window` plus an instruction asking for the current limit does not.
-- No code-search operators (`repo:`, `path:`, `language:`). Scope with `--responses-allowed-domains`; it restricts Grok, Tavily, and Firecrawl alike, and off-domain leftovers rank last.
-- One search per sub-question is usually enough; to check a claim, fetch its source instead of searching again. Search again only for a gap you can name. Do not carry the previous round's conclusion words into the keywords; for the same X handle, change the gap, not the phrasing.
+- Only Grok reads the query, so write it as the question you want answered, with the fields you need: "What is the latest stable Go release, the full version number and its release date?" `--instructions` is optional, for how to answer (format, language, "quote and date only, no advice, say if not found"). Do not send a bag of keywords like `GPT Codex 1M 272k context window`; Grok fills the gaps with invented background.
+- No code-search operators (`repo:`, `path:`, `language:`). Scope with `--responses-allowed-domains`.
+- One search per sub-question is usually enough; to check a claim, fetch its source instead of searching again. Search again only for a gap you can name. Do not carry the previous round's conclusion words into the new question; for the same X handle, change the gap, not the phrasing.
 
 ## Search Source
 
-Default is web. `--source x` for what people are saying, a named account's posts, a thread, or a claim only circulating on X. `--source both` for a current event where reporting and reaction both matter. `--source x` cannot fall back to the web and turns Tavily/Firecrawl off (`--extra N` forces them).
+Default is web. `--source x` for what people are saying, a named account's posts, a thread, or a claim only circulating on X. `--source both` for a current event where reporting and reaction both matter. `--source x` cannot fall back to the web.
 
 - For "is it available now / current state" questions, start with `--x-from-date` 60–90 days back; widen only if empty (`diagnostics.warnings` says when the window read no posts). Old issues explain history, not the present.
 - X posts are personal statements: cite handle and date (both live in `answer.text`, not the card), keep claims separate from confirmations, confirm facts at the official source.
@@ -55,7 +55,7 @@ Every script prints one JSON object, also on failure (non-zero exit, stderr line
 
 - `error`: read `error.message`, `error.code`, `diagnostics.provider_attempts`. Change something before retrying (query, `--provider`, `--model`). `DEADLINE_EXCEEDED`: the whole command hit its time budget (default 240s, `--deadline N`).
 - A line starting with `[grok-search]` inside `content.text` or `answer.text` changes how to read it: the text was cut (the line says where the rest is), the page redirected to the site's home page, or the provider got no text. `diagnostics.warnings` repeats these and adds the rest: providers skipped (e.g. Firecrawl in cooldown) or failed, a relay serving another model than requested. `diagnostics.provider_attempts` lists each provider tried.
-- Search: `answer.text`, then `sources.items` (max 12; Grok's sources and Tavily/Firecrawl results share them, so a cited link may appear only in `answer.text`). `source_type` `citation` = used in the answer, `searched` = only listed; `opened: true` = Grok read the page. `sources.raw_path` always points to the run record (full list, answer, tool calls); read it in chunks only when the cards are not enough. Check `diagnostics.degraded`, `diagnostics.cost_usd`, and `diagnostics.search_budget` (advisory budget vs. calls made).
+- Search: `answer.text`, then `sources.items` (up to 12 of Grok's sources, cited ones kept first, so a cited link may appear only in `answer.text`). `source_type` `citation` = used in the answer, `searched` = only listed; `opened: true` = Grok read the page. `sources.raw_path` always points to the run record (full list, answer, tool calls); read it in chunks only when the cards are not enough. Check `diagnostics.cost_usd` and `diagnostics.search_budget` (advisory budget vs. calls made).
 - Fetch: `content.text`, up to `--max-chars` characters (default 12000) from `--offset` (default 0); `content.chars` counts page text only. A cut page ends with a `[grok-search]` line giving the next `--offset` and `content.full_path`: continue from there instead of raising `--max-chars`. stdout stays under 45KB whatever `--max-chars` says. Non-HTML files come back as served (JSON re-indented). `metadata` has title/author/published_at when the provider had them. `diagnostics.run_path` is the run record.
 - Map: `urls`; fetch the few you need. A URL with a path maps that path and below, on that site only; map the site root for the whole site.
 

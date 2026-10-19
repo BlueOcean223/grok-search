@@ -14,7 +14,6 @@
   "xImageUnderstanding": false,
   "xVideoUnderstanding": false,
   "responsesOpenRouterEngine": "auto",
-  "defaultExtra": 6,
   "sourceChars": 400,
   "maxSources": 12,
   "deadlineSeconds": 240,

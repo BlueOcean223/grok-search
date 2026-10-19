@@ -1,6 +1,5 @@
 import { recordFirecrawlCooldown } from "./cooldown.js";
 import { authHeaders, backoffMs, debugLog, isPlainObject, requestJson, sleep, trimBody, upstreamMessage } from "./http.js";
-import { domainFilters, sourceCard } from "./sources.js";
 
 export function firecrawlAuthMode(config) {
   return config?.firecrawlApiKey ? "api_key" : "keyless";
@@ -164,59 +163,4 @@ export async function firecrawlScrape(url, config, { timeoutMs = 90_000 } = {}) 
   }
 
   return fail("Firecrawl Scrape 返回空内容");
-}
-
-function sourceFromFirecrawl(result) {
-  return sourceCard(result?.url, { provider: "firecrawl", title: result?.title, snippet: result?.description });
-}
-
-export async function firecrawlSearch(query, limit, config, filters = {}) {
-  const endpoint = `${config.firecrawlApiUrl.replace(/\/+$/, "")}/search`;
-  const authMode = firecrawlAuthMode(config);
-  const { allowed, excluded } = domainFilters(filters);
-  try {
-    const data = await requestJson(endpoint, {
-      headers: firecrawlHeaders(config),
-      body: {
-        query,
-        limit,
-        // Firecrawl v2 search: includeDomains / excludeDomains are hostnames and mutually
-        // exclusive, which resolveFilterPair already guarantees upstream.
-        ...(allowed.length ? { includeDomains: allowed } : {}),
-        ...(excluded.length ? { excludeDomains: excluded } : {}),
-      },
-      timeoutMs: 90_000,
-      config,
-      retry: true,
-    });
-    const rawResults = Array.isArray(data?.data?.web)
-      ? data.data.web
-      : Array.isArray(data?.data)
-        ? data.data
-        : Array.isArray(data?.web)
-          ? data.web
-          : [];
-    const sources = rawResults.map(sourceFromFirecrawl).filter(Boolean);
-    return {
-      ok: true,
-      provider: "firecrawl",
-      auth_mode: authMode,
-      sources,
-      raw: data,
-      ...(Number.isFinite(data?.creditsUsed) ? { credits_used: data.creditsUsed } : {}),
-    };
-  } catch (error) {
-    const quota = isFirecrawlQuotaError(error);
-    if (quota) {
-      await recordFirecrawlCooldown(config, { authMode, retryAfterMs: error.retryAfterMs, reason: error.upstreamCode || "quota" });
-    }
-    return {
-      ok: false,
-      provider: "firecrawl",
-      auth_mode: authMode,
-      error: error.message,
-      sources: [],
-      ...(quota ? { quota_exhausted: true } : {}),
-    };
-  }
 }

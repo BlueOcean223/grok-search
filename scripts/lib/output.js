@@ -5,7 +5,7 @@ import path from "node:path";
 import { debugLog, redactSecrets } from "./http.js";
 
 const OUTPUT_PREFIX = "grok-search-";
-const RUN_RECORD_SCHEMA_VERSION = 2;
+const RUN_RECORD_SCHEMA_VERSION = 3;
 
 function timestamp() {
   const date = new Date();

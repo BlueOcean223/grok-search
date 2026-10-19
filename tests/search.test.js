@@ -8,8 +8,8 @@ import { grokSearchResult } from "../scripts/lib/grok-responses.js";
 import { runSearch, SEARCH_OPTIONS } from "../scripts/lib/search.js";
 
 // runSearch through its own interface: parsed args with their config defaults applied, a config,
-// and the three search channels as fakes. The Grok fake runs the real parser over a fixture body, so the result has the shape
-// searchGrokResponses returns; only the HTTP request is left out.
+// and the Grok channel as a fake. The fake runs the real parser over a fixture body, so the result
+// has the shape searchGrokResponses returns; only the HTTP request is left out.
 
 const outputDir = await mkdtemp(path.join(tmpdir(), "grok-search-test-output-"));
 const stateDir = await mkdtemp(path.join(tmpdir(), "grok-search-test-state-"));
@@ -30,9 +30,6 @@ const config = {
   responsesXImageUnderstanding: false,
   responsesXVideoUnderstanding: false,
   responsesOpenRouterEngine: "auto",
-  tavilyApiKey: "t",
-  firecrawlApiKey: "",
-  defaultExtra: 4,
   sourceChars: 400,
   maxSources: 12,
   deadlineSeconds: 240,
@@ -48,8 +45,6 @@ const baseArgs = applyConfigDefaults({
   query: "node release",
   platform: "",
   model: "",
-  extra: null,
-  extraMode: "auto",
   sourceChars: null,
   maxSources: null,
   fullSources: false,
@@ -94,44 +89,25 @@ const responsesBody = {
 };
 
 const grokFromFixture = (body) => async (query, options, cfg) => grokSearchResult(body, options, cfg, { requests: 1 });
-const tavilyOk = async (query, limit) => ({
-  ok: true,
-  provider: "tavily",
-  sources: [{ url: "https://nodejs.org/en/download", provider: "tavily", title: "Download Node.js", snippet: "Current and LTS downloads." }].slice(0, limit),
-  raw: { results: 1 },
-});
-const firecrawlOk = async (query, limit) => ({
-  ok: true,
-  provider: "firecrawl",
-  auth_mode: "keyless",
-  sources: [{ url: "https://github.com/nodejs/node/releases", provider: "firecrawl", title: "Releases · nodejs/node", snippet: "Release list." }].slice(0, limit),
-  raw: {},
-});
-
-// The ordinary path: Grok's answer, cards merged across the three channels, the run record.
+// The ordinary path: Grok's answer, its cards, the run record.
 {
-  const output = await runSearch(baseArgs, config, { grok: grokFromFixture(responsesBody), tavily: tavilyOk, firecrawl: firecrawlOk });
+  const output = await runSearch(baseArgs, config, { grok: grokFromFixture(responsesBody) });
   assert.equal(output.query, "node release");
   assert.equal(output.model, "grok-4.3");
   assert.match(output.answer.text, /^Node 24 is current/);
   assert.equal(output.answer.truncated, false);
 
   const urls = output.sources.items.map((item) => item.url);
-  assert.deepEqual(urls, [
-    "https://nodejs.org/en/blog/release/v24.0.0",
-    "https://github.com/nodejs/node/releases",
-    "https://nodejs.org/en/download",
-  ]);
+  assert.deepEqual(urls, ["https://nodejs.org/en/blog/release/v24.0.0", "https://github.com/nodejs/node/releases"]);
   const release = output.sources.items[0];
   assert.equal(release.source_type, "citation");
   assert.equal(release.opened, true);
   assert.equal(release.title, "the release post");
-  // The GitHub listing was only listed by Grok; Firecrawl's copy filled in its title.
+  // The GitHub listing was only listed by Grok, with the URL for a title: a bare card.
   const releases = output.sources.items[1];
   assert.equal(releases.source_type, "searched");
-  assert.equal(releases.title, "Releases · nodejs/node");
-  assert.deepEqual(releases.merged_from, ["firecrawl"]);
-  assert.deepEqual({ returned: output.sources.returned, total: output.sources.total, omitted: output.sources.omitted }, { returned: 3, total: 3, omitted: 0 });
+  assert.equal(releases.title, undefined);
+  assert.deepEqual({ returned: output.sources.returned, total: output.sources.total, omitted: output.sources.omitted }, { returned: 2, total: 2, omitted: 0 });
 
   const diagnostics = output.diagnostics;
   assert.equal(diagnostics.grok_endpoint, "responses");
@@ -151,69 +127,58 @@ const firecrawlOk = async (query, limit) => ({
   });
   assert.deepEqual(
     diagnostics.provider_attempts.map((attempt) => [attempt.provider, attempt.ok, attempt.count]),
-    [
-      ["grok-responses:xai", true, 2],
-      ["tavily", true, 1],
-      ["firecrawl", true, 1],
-    ]
+    [["grok-responses:xai", true, 2]]
   );
-  assert.deepEqual(diagnostics.options.extra_allocation, { tavily: 2, firecrawl: 2 });
-  assert.equal(diagnostics.options.extra_mode, "auto");
   assert.equal(diagnostics.options.search_source, "web");
+  assert.equal(Object.hasOwn(diagnostics.options, "extra"), false);
   assert.deepEqual(diagnostics.warnings, []);
-  assert.equal(diagnostics.degraded, undefined);
 
   const record = JSON.parse(await readFile(output.sources.raw_path, "utf8"));
   assert.equal(record.kind, "search");
+  assert.equal(record.schema_version, 3);
   assert.equal(record.answer, output.answer.text);
   assert.equal(record.sources.grok.length, 2);
-  assert.equal(record.sources.extra.length, 2);
+  assert.equal(record.sources.items.length, 2);
+  assert.equal(Object.hasOwn(record.sources, "extra"), false);
   assert.equal(record.grok_tool_calls.length, 2);
   assert.deepEqual(record.printed_answer, { chars: output.answer.chars, truncated: false, full_path: null });
   assert.equal(record.error, null);
 }
 
-// A rate-limited Grok with extras available degrades to the raw extra results, named as a rate limit.
+// A rate limit and an exhausted quota are errors named as what they are, with the options that
+// were in force.
 {
-  const rateLimited = async () => {
-    const error = new Error("HTTP 429: slow down");
-    error.status = 429;
+  const failing = (status, message) => async () => {
+    const error = new Error(message);
+    error.status = status;
     throw error;
   };
-  const output = await runSearch(baseArgs, config, { grok: rateLimited, tavily: tavilyOk, firecrawl: firecrawlOk });
-  assert.equal(output.diagnostics.degraded, true);
-  assert.deepEqual(output.diagnostics.grok_error, { code: "RATE_LIMITED", message: "HTTP 429: slow down" });
-  assert.match(output.answer.text, /^> ⚠️ Grok Responses 触发限流/);
-  assert.match(output.answer.text, /## Tavily[\s\S]*## Firecrawl/);
-  assert.equal(output.sources.items.length, 2);
-  assert.equal(output.diagnostics.provider_attempts[0].ok, false);
-  assert.match(output.diagnostics.warnings[0], /rate limited/);
-}
-
-// An exhausted quota with extras off is an error that says so, with the options that were in force.
-{
-  const quota = async () => {
-    const error = new Error("HTTP 402: insufficient credits");
-    error.status = 402;
-    throw error;
-  };
-  await assert.rejects(
-    runSearch({ ...baseArgs, extra: 0, extraMode: "off" }, config, { grok: quota, tavily: tavilyOk, firecrawl: firecrawlOk }),
-    (error) => {
-      assert.equal(error.code, "GROK_QUOTA_EXHAUSTED");
-      assert.match(error.message, /extra sources 已显式关闭/);
-      assert.deepEqual(error.diagnostics.grok_error, { code: "QUOTA_EXHAUSTED", message: "HTTP 402: insufficient credits" });
-      assert.equal(error.diagnostics.options.extra_mode, "off");
-      assert.deepEqual(error.diagnostics.provider_attempts.map((attempt) => attempt.provider), ["grok-responses:xai"]);
-      return true;
-    }
-  );
+  await assert.rejects(runSearch(baseArgs, config, { grok: failing(429, "HTTP 429: slow down") }), (error) => {
+    assert.equal(error.code, "GROK_RATE_LIMITED");
+    assert.equal(error.message, "Grok Responses 触发限流: HTTP 429: slow down");
+    assert.deepEqual(error.diagnostics.grok_error, { code: "RATE_LIMITED", message: "HTTP 429: slow down" });
+    assert.match(error.diagnostics.warnings[0], /rate limited/);
+    return true;
+  });
+  await assert.rejects(runSearch(baseArgs, config, { grok: failing(402, "HTTP 402: insufficient credits") }), (error) => {
+    assert.equal(error.code, "GROK_QUOTA_EXHAUSTED");
+    assert.deepEqual(error.diagnostics.grok_error, { code: "QUOTA_EXHAUSTED", message: "HTTP 402: insufficient credits" });
+    assert.equal(error.diagnostics.options.search_source, "web");
+    assert.deepEqual(error.diagnostics.provider_attempts.map((attempt) => [attempt.provider, attempt.ok]), [["grok-responses:xai", false]]);
+    return true;
+  });
+  // Any other failure is reported unchanged, with the diagnostics attached.
+  await assert.rejects(runSearch(baseArgs, config, { grok: failing(524, "HTTP 524: timeout") }), (error) => {
+    assert.equal(error.message, "HTTP 524: timeout");
+    assert.match(error.diagnostics.warnings[0], /Responses search failed: HTTP 524/);
+    return true;
+  });
 }
 
 // An empty answer is an error that keeps what the call measured: usage, cost, the served model.
 {
   const empty = { ...responsesBody, output: responsesBody.output.slice(0, 2) };
-  await assert.rejects(runSearch(baseArgs, config, { grok: grokFromFixture(empty), tavily: tavilyOk, firecrawl: firecrawlOk }), (error) => {
+  await assert.rejects(runSearch(baseArgs, config, { grok: grokFromFixture(empty) }), (error) => {
     assert.equal(error.code, "GROK_RESPONSES_EMPTY");
     assert.equal(error.diagnostics.cost_usd, 0.005);
     assert.equal(error.diagnostics.responses_model, "grok-4.3");
@@ -224,16 +189,9 @@ const firecrawlOk = async (query, limit) => ({
   });
 }
 
-// --source x keeps the extras off unless asked for, and the X prompt budget shows in the diagnostics.
+// The X prompt budget shows in the diagnostics of an X search.
 {
-  const calls = [];
-  const spy = (name) => async () => {
-    calls.push(name);
-    return { ok: true, provider: name, sources: [], raw: {} };
-  };
-  const output = await runSearch({ ...baseArgs, searchSource: "x" }, config, { grok: grokFromFixture(responsesBody), tavily: spy("tavily"), firecrawl: spy("firecrawl") });
-  assert.deepEqual(calls, []);
-  assert.equal(output.diagnostics.options.extra_mode, "off-x-only");
+  const output = await runSearch({ ...baseArgs, searchSource: "x" }, config, { grok: grokFromFixture(responsesBody) });
   assert.equal(output.diagnostics.search_budget.prompt_x, 4);
 }
 
@@ -242,7 +200,7 @@ const firecrawlOk = async (query, limit) => ({
 // read nothing on 2026-10-11).
 {
   const xUsage = (fetched) => ({ ...responsesBody, usage: { ...responsesBody.usage, server_side_tool_usage_details: { x_search_calls: 3, x_posts_fetched: fetched } } });
-  const run = (args, body) => runSearch({ ...baseArgs, searchSource: "x", ...args }, config, { grok: grokFromFixture(body), tavily: tavilyOk, firecrawl: firecrawlOk });
+  const run = (args, body) => runSearch({ ...baseArgs, searchSource: "x", ...args }, config, { grok: grokFromFixture(body) });
   const filterWarnings = (output) => output.diagnostics.warnings.filter((line) => line.startsWith("X search read no posts"));
 
   assert.deepEqual(filterWarnings(await run({ xFromDate: "2026-09-01" }, xUsage(0))), [

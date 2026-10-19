@@ -190,27 +190,18 @@ X citation 只带裸 URL，且 `title` 就是 inline citation 序号（`"1"`、`
 
 citation 本身不带产出工具信息，所以 `tool` 是推断的：**挂了 `x_search` 时**（`--source x` / `both`，以及 OpenRouter——那里 `x_search` 必然随行）X 链接标为 `x_search`；`--source web` 下不标，因为 web search 本来就会索引 x.com 页面，标成 `x_search` 等于报告一次没发生的检索。URL 还原出的 `x_handle` / `x_post_id` 与挂了哪个工具无关，始终保留。
 
-## Tavily 与 Firecrawl
+## 不再有 Tavily 与 Firecrawl
 
-它们与 Responses 请求并行，但不进入 `input`：
-
-```text
-Grok Responses ──────────────┐
-Tavily Search（有 key）───────┼─ sources.items（去重合并 + 上限裁剪）
-Firecrawl Search（Keyless/key）┘
-```
-
-默认合计 6 条；两家可用时 3/3。Firecrawl provider attempt 会包含 `auth_mode`、`requests`、`duration_ms`，可能包含 `credits_used`；冷却期内为 `skipped: true`。域名过滤会下推给两家，域外结果在排序时降到最后并计入 `off_domain`。`--instructions` 不会传给两家。
+2026-10-19 之前，Tavily Search 与 Firecrawl Search 与 Responses 请求并行，结果去重合并进 `sources.items`，Grok 额度耗尽时降级为它们的原始结果。真实会话里极少用到，于是删掉（数据见 `.agent/extras-review-2026-10-19.md`）。`sources.items` 现在只有 Grok 的来源。
 
 ## 额度错误
 
-只有明确额度信号触发 degraded success：
+Grok 失败一律报错，额度与限流各有错误码：
 
-- HTTP 402；
-- HTTP 429 且正文包含 quota、credit、balance、billing、额度、余额等信号；
-- `insufficient_quota`、`credits_exhausted` 等错误码。
+- HTTP 402；HTTP 429 且正文包含 quota、credit、balance、billing、额度、余额等信号；`insufficient_quota`、`credits_exhausted` 等错误码：`GROK_QUOTA_EXHAUSTED`，`diagnostics.grok_error.code` 为 `QUOTA_EXHAUSTED`。
+- 重试后仍然是不带额度信号的 429：`GROK_RATE_LIMITED`，`grok_error.code` 为 `RATE_LIMITED`。
 
-不带额度信号的 429 归为 `RATE_LIMITED`，降级行为相同但 `grok_error.code` 与 warning 文案如实区分。降级输出同时包含人类可见警告和结构化 `diagnostics.grok_error`。`--no-extra` 时返回 `GROK_QUOTA_EXHAUSTED` / `GROK_RATE_LIMITED`。401/403、404/422、5xx、超时和空响应仍是普通错误。
+401/403、404/422、5xx、超时和空响应保留上游信息。
 
 ## Diagnostics
 
@@ -230,7 +221,5 @@ Firecrawl Search（Keyless/key）┘
 - 中转差异还包括：X 搜索以 `custom_tool_call`（`x_keyword_search` / `x_thread_fetch` …）形式返回，解析器按 `x_search` 计数并把 `by_action` 写成 `keyword_search` / `thread_fetch`；每个 turn 的过场 message（"I'll search X…"）被丢弃，`answer.text` 只取最后一条，除非前面的 message 很长或带 citation。grok-4.6、grok-4.7 经中转时过场话和答案拼在同一段文本里，这时按 system prompt 要求的答案标记行 `<!-- answer -->` 切开（空格和大小写不同也认），标记前的文字写进运行记录的 `answer_preamble`；模型没写标记就保留全文
 - xAI 的引用渲染标记偶尔漏进正文：私用区字符包着的 `\ue200render_inline_citation speecheo_citation_id="10"\ue201`（grok-4.6，2026-10-08），或链接后裸露的 `show render_inline_citation with citation_id="2"`（grok-4.6-build，2026-09-17）。解析器删掉这两种标记，周围的正文和链接不动
 - `options.instructions_chars`（传了 `--instructions` 时）
-- `extra_allocation`
-- `firecrawl_auth_mode`
-- `degraded` / `grok_error`
+- `grok_error`（报额度或限流错误时）
 - `usage` / `cost_usd`

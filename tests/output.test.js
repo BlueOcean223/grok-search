@@ -34,7 +34,7 @@ assert.equal((await stat(second)).mode & 0o777, 0o600);
 
 // Run records: one JSON per command, named by kind, private, with the schema header.
 const base = runRecordBase("search", { grokApiKey: "" }, "2026-09-08T00:00:00.000Z");
-assert.equal(base.schema_version, 2);
+assert.equal(base.schema_version, 3);
 assert.equal(base.kind, "search");
 assert.equal(base.created_at, "2026-09-08T00:00:00.000Z");
 assert.equal(Array.isArray(base.argv), true);
@@ -47,7 +47,7 @@ const runPath = await writeRunRecord(config, {
 assert.match(path.basename(runPath), /^grok-search-\d{8}-\d{6}-run-search-run-record-query-[0-9a-f]{6}\.json$/);
 assert.equal((await stat(runPath)).mode & 0o777, 0o600);
 const stored = JSON.parse(await readFile(runPath, "utf8"));
-assert.equal(stored.schema_version, 2);
+assert.equal(stored.schema_version, 3);
 assert.equal(stored.answer, "full answer");
 assert.equal(stored.error, null);
 

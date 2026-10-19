@@ -1,6 +1,5 @@
 import { authHeaders, requestJson } from "./http.js";
 import { mapScope, scopePattern } from "./map-scope.js";
-import { domainFilters, sourceCard } from "./sources.js";
 
 export async function tavilyExtract(url, config) {
   if (!config.tavilyApiKey) {
@@ -32,48 +31,6 @@ export async function tavilyExtract(url, config) {
     };
   } catch (error) {
     return { ok: false, provider: "tavily", error: error.message };
-  }
-}
-
-function sourceFromTavily(result) {
-  return sourceCard(result?.url, {
-    provider: "tavily",
-    title: result?.title,
-    snippet: result?.content,
-    published_date: result?.published_date,
-    score: result?.score,
-  });
-}
-
-export async function tavilySearch(query, limit, config, filters = {}) {
-  if (!config.tavilyApiKey) {
-    return { ok: false, provider: "tavily", skipped: true, error: "TAVILY_API_KEY 未配置", sources: [] };
-  }
-
-  const { allowed, excluded } = domainFilters(filters);
-  const endpoint = `${config.tavilyApiUrl.replace(/\/+$/, "")}/search`;
-  try {
-    const data = await requestJson(endpoint, {
-      headers: authHeaders(config.tavilyApiKey),
-      body: {
-        query,
-        max_results: limit,
-        search_depth: "advanced",
-        include_raw_content: false,
-        include_answer: false,
-        // Tavily: include_domains (max 300) / exclude_domains (max 150); "filter" restricts
-        // results to the list, "boost" would only rank them higher.
-        ...(allowed.length ? { include_domains: allowed, include_domains_mode: "filter" } : {}),
-        ...(excluded.length ? { exclude_domains: excluded } : {}),
-      },
-      timeoutMs: 90_000,
-      config,
-      retry: true,
-    });
-    const sources = (Array.isArray(data?.results) ? data.results : []).map(sourceFromTavily).filter(Boolean);
-    return { ok: true, provider: "tavily", sources, raw: data };
-  } catch (error) {
-    return { ok: false, provider: "tavily", error: error.message, sources: [] };
   }
 }
 

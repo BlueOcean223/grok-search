@@ -46,7 +46,6 @@ const CONFIG_OPTIONS = [
   { key: "tavilyApiKey", env: "TAVILY_API_KEY", fileKeys: ["tavilyApiKey", "tavily_api_key"], type: "string" },
   { key: "firecrawlApiUrl", env: "FIRECRAWL_API_URL", fileKeys: ["firecrawlApiUrl", "firecrawl_api_url"], type: "string", default: "https://api.firecrawl.dev/v2" },
   { key: "firecrawlApiKey", env: "FIRECRAWL_API_KEY", fileKeys: ["firecrawlApiKey", "firecrawl_api_key"], type: "string" },
-  { key: "defaultExtra", env: "GROK_DEFAULT_EXTRA", fileKeys: ["defaultExtra", "default_extra"], type: "int", min: 0, default: 6 },
   { key: "sourceChars", env: "GROK_SOURCE_CHARS", fileKeys: ["sourceChars", "source_chars"], type: "int", min: 0, default: DEFAULT_SOURCE_CHARS },
   { key: "maxSources", env: "GROK_MAX_SOURCES", fileKeys: ["maxSources", "max_sources"], type: "int", min: 1, default: DEFAULT_MAX_SOURCES },
   { key: "deadlineSeconds", env: "GROK_DEADLINE_SECONDS", fileKeys: ["deadlineSeconds", "deadline_seconds"], type: "int", min: 0, default: 240 },

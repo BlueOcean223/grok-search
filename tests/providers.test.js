@@ -11,9 +11,8 @@ import {
   recordFirecrawlCooldown,
 } from "../scripts/lib/cooldown.js";
 import { collapseRepeatedLines, directFirstForX, validateXPostContent } from "../scripts/lib/direct-fetch.js";
-import { firecrawlMetadata, firecrawlScrape, firecrawlSearch } from "../scripts/lib/firecrawl.js";
+import { firecrawlMetadata, firecrawlScrape } from "../scripts/lib/firecrawl.js";
 import { fetchUrl } from "../scripts/lib/providers.js";
-import { tavilySearch } from "../scripts/lib/tavily.js";
 import { parseXPostUrl } from "../scripts/lib/sources.js";
 
 const stateDir = await mkdtemp(path.join(tmpdir(), "grok-search-state-"));
@@ -441,27 +440,6 @@ await withServer(
   }
 );
 
-// firecrawlSearch hitting the quota also records the cooldown, using the shorter wait as is.
-requests = 0;
-await withServer(
-  (req, res) => {
-    requests += 1;
-    req.resume();
-    res.writeHead(429, { "content-type": "application/json" });
-    res.end(quotaBody(4567));
-  },
-  async (base) => {
-    const result = await firecrawlSearch("query", 3, { ...baseConfig, firecrawlApiUrl: base });
-    assert.equal(result.ok, false);
-    assert.equal(result.quota_exhausted, true);
-    assert.equal(requests, 1);
-    const cooldown = await readFirecrawlCooldown(baseConfig);
-    const remainingMs = Date.parse(cooldown.until) - Date.now();
-    assert.equal(remainingMs > 4_500_000 && remainingMs <= 4_567_000, true);
-  }
-);
-await clearFirecrawlCooldown(baseConfig);
-
 // Missing retry_after falls back to the default 15 minutes; an absurd one is capped at 24h.
 {
   const short = await recordFirecrawlCooldown(baseConfig, { authMode: "keyless", retryAfterMs: null });
@@ -472,49 +450,6 @@ await clearFirecrawlCooldown(baseConfig);
   await clearFirecrawlCooldown(baseConfig);
   assert.equal(await readFirecrawlCooldown(baseConfig), null);
 }
-
-// Domain filters reach both extra providers in their own vocabulary.
-await withServer(
-  (req, res) => {
-    readBody(req, (body) => {
-      res.writeHead(200, { "content-type": "application/json" });
-      if (req.url === "/search") {
-        assert.deepEqual(body.includeDomains, ["github.com"]);
-        assert.equal(Object.hasOwn(body, "excludeDomains"), false);
-        res.end(JSON.stringify({ success: true, data: { web: [] } }));
-        return;
-      }
-      if (req.url === "/tavily/search") {
-        assert.deepEqual(body.include_domains, ["github.com"]);
-        assert.equal(body.include_domains_mode, "filter");
-        assert.equal(Object.hasOwn(body, "exclude_domains"), false);
-        res.end(JSON.stringify({ results: [] }));
-        return;
-      }
-      if (req.url === "/excluded/search") {
-        assert.deepEqual(body.excludeDomains, ["reddit.com"]);
-        assert.equal(Object.hasOwn(body, "includeDomains"), false);
-        res.end(JSON.stringify({ success: true, data: { web: [] } }));
-        return;
-      }
-      res.end(JSON.stringify({}));
-    });
-  },
-  async (base) => {
-    const filters = { allowedDomains: ["github.com"], excludedDomains: [] };
-    const firecrawl = await firecrawlSearch("query", 2, { ...baseConfig, firecrawlApiUrl: base }, filters);
-    assert.equal(firecrawl.ok, true);
-    const tavily = await tavilySearch("query", 2, { ...baseConfig, tavilyApiKey: "key", tavilyApiUrl: `${base}/tavily` }, filters);
-    assert.equal(tavily.ok, true);
-    const excluded = await firecrawlSearch(
-      "query",
-      2,
-      { ...baseConfig, firecrawlApiUrl: `${base}/excluded` },
-      { allowedDomains: [], excludedDomains: ["reddit.com"] }
-    );
-    assert.equal(excluded.ok, true);
-  }
-);
 
 // Metadata normalisation falls back to Open Graph keys and drops what is missing.
 assert.deepEqual(

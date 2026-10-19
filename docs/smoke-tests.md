@@ -6,7 +6,7 @@
 npm test
 ```
 
-覆盖 Responses body/解析、三路并发、Keyless/API-key、额度降级与限流区分、source schema（字段合并、序号标题、opened、域名降级）、Firecrawl 重试 / Retry-After / 冷却、X 原帖 Direct 校验、运行记录、代理与 fetch/map fallback。
+覆盖 Responses body/解析、Keyless/API-key、额度与限流错误区分、source schema（序号标题、opened、卡片选取）、Firecrawl 重试 / Retry-After / 冷却、X 原帖 Direct 校验、运行记录、代理与 fetch/map fallback。
 
 ## 无 Grok key
 
@@ -34,12 +34,11 @@ cat > ~/.cache/grok-search/firecrawl-cooldown.json <<'EOF2'
 {"until":"2099-01-01T00:00:00.000Z","auth_mode":"keyless","reason":"credits","hit_at":"2026-09-08T00:00:00.000Z"}
 EOF2
 ./scripts/fetch.js https://example.com
-./scripts/search.js "any query"
 ./scripts/fetch.js --provider firecrawl https://example.com
 rm -f ~/.cache/grok-search/firecrawl-cooldown.json
 ```
 
-期望：前两条 provider attempts 里 Firecrawl 为 `skipped: true`、`error` 以 `cooldown until` 开头，fetch 落到 Direct，search 的 extra 为空并有 warning（无 Tavily 时）；第三条显式指定仍会真打，成功后冷却文件被删除。
+期望：第一条 provider attempts 里 Firecrawl 为 `skipped: true`、`error` 以 `cooldown until` 开头，fetch 落到 Tavily 或 Direct；第二条显式指定仍会真打，成功后冷却文件被删除。
 
 ## Direct xAI
 
@@ -49,8 +48,7 @@ export GROK_API_URL="https://api.x.ai/v1"
 export GROK_API_KEY="your-key"
 export GROK_MODEL="grok-4.3"
 
-./scripts/search.js "latest xAI docs"
-./scripts/search.js --no-extra "only Grok Responses"
+./scripts/search.js "xAI 文档里 grok-4.3 的价格是多少？"
 ```
 
 期望：
@@ -59,17 +57,17 @@ export GROK_MODEL="grok-4.3"
 - 默认 `responses_max_turns` 为 3；
 - `diagnostics.options.search_source` 为 `web`，且请求体只挂 `web_search`；
 - `sources.items` 可含 `citation` / `searched`，`sources.omitted` 标记裁剪；
-- 默认 extra allocation 在没有 Tavily key 时全部给 Firecrawl；
-- `sources.raw_path` 非空，文件含 `schema_version: 2`、`query`、`answer`、`sources.items`、`grok_tool_calls`；
+- `sources.items` 的 provider 都是 `grok-responses`，`diagnostics.provider_attempts` 只有 Grok 一条；
+- `sources.raw_path` 非空，文件含 `schema_version: 3`、`query`、`answer`、`sources.items`、`grok_tool_calls`；
 - `diagnostics.responses_tool_calls` 含 `upstream` / `trace` / `by_action`，`diagnostics.search_budget.enforced` 为 `false`。
 
 ### 域名限定
 
 ```bash
-./scripts/search.js --responses-allowed-domains github.com "pi coding agent search skill"
+./scripts/search.js --responses-allowed-domains github.com "有哪些给 pi coding agent 用的搜索 skill？"
 ```
 
-期望：`diagnostics.options.extra_domain_filter` 为 `pushed`；`sources.items` 里 extra 结果 host 都在 github.com 内，若有域外结果则排在所有 `searched` 之后，且对应 provider attempt 的 `off_domain` 大于 0。
+期望：`diagnostics.options.responses_allowed_domains` 为 `["github.com"]`；`sources.items` 的 host 都在 github.com 内。
 
 ### 研究指令
 
@@ -82,9 +80,9 @@ export GROK_MODEL="grok-4.3"
 ## X 检索
 
 ```bash
-./scripts/search.js --source x --no-extra "X 上大家怎么评价 grok-4.6"
+./scripts/search.js --source x "X 上大家怎么评价 grok-4.6"
 ./scripts/search.js --source both --responses-allowed-x-handles xai "latest xAI news"
-./scripts/search.js --source x --x-from-date 2026-08-01 --no-extra "query"
+./scripts/search.js --source x --x-from-date 2026-08-01 "query"
 ```
 
 期望：
@@ -98,7 +96,7 @@ export GROK_MODEL="grok-4.3"
 时间线题（同一话题存在 3 月与 8 月两种说法）：
 
 ```bash
-./scripts/search.js --source x --no-extra --x-from-date 2026-07-01 "codex 1M context availability"
+./scripts/search.js --source x --x-from-date 2026-07-01 "codex 1M context availability"
 ```
 
 期望：结果里的帖子日期都不早于 2026-07-01；`answer.text` 对新旧说法分别标注日期，不把旧 issue 当现状。
@@ -131,19 +129,6 @@ export GROK_MODEL="x-ai/grok-4.1-fast"
 ```
 
 期望 tool 为 `openrouter:web_search`，模型名没有自动 `:online`。
-
-## Tavily + Firecrawl
-
-```bash
-export TAVILY_API_KEY="tvly-your-key"
-./scripts/search.js "latest pi coding agent docs"
-./scripts/search.js --extra 10 "latest pi coding agent docs"
-
-export FIRECRAWL_API_KEY="fc-your-key"
-./scripts/search.js "latest pi coding agent docs"
-```
-
-默认 `extra=6` 时应分配 Tavily 3 / Firecrawl 3。移除 Firecrawl key 后仍应成功，auth mode 变为 `keyless`。
 
 ## Fetch 主备链
 

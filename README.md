@@ -4,7 +4,7 @@
 
 `grok-search` 是一个通用 AI agent skill / 脚本包，用轻量 Node.js 脚本提供三类网络访问能力：
 
-- **Search**：通过 Responses API 调用 Grok / OpenRouter / Responses-compatible 接口，并行返回 Tavily / Firecrawl 独立信源。
+- **Search**：通过 Responses API 调用 Grok / OpenRouter / Responses-compatible 接口，返回 Grok 的回答和它的来源。
 - **Fetch**：抓取指定 URL 的可读内容，优先使用 Tavily / Firecrawl，最后 fallback 到无 key 的 Direct Fetch。
 - **Map**：发现站点内的候选页面 URL，优先使用 Tavily Map，最后 fallback 到轻量 Direct Map。
 
@@ -80,7 +80,6 @@ chmod 600 ~/.config/grok-search/config.json
   "responsesAllowedXHandles": [],
   "responsesExcludedXHandles": [],
   "responsesOpenRouterEngine": "auto",
-  "defaultExtra": 6,
   "sourceChars": 400,
   "tavilyApiKey": "",
   "tavilyApiUrl": "https://api.tavily.com",
@@ -166,13 +165,12 @@ Node 原生 `fetch` 默认不会可靠读取终端代理变量。本项目会在
 | `GROK_X_IMAGE_UNDERSTANDING` | `xImageUnderstanding` | 否 | Responses | 分析 X 帖子中的图片，按 token 额外计费。默认 `false`。 |
 | `GROK_X_VIDEO_UNDERSTANDING` | `xVideoUnderstanding` | 否 | Responses | 分析 X 帖子中的视频，按 token 额外计费。默认 `false`。 |
 | `GROK_RESPONSES_OPENROUTER_ENGINE` | `responsesOpenRouterEngine` | 否 | OpenRouter Responses | `auto`、`native`、`exa`、`firecrawl`、`parallel` 或 `perplexity`。默认 `auto`。 |
-| `GROK_DEFAULT_EXTRA` | `defaultExtra` | 否 | `search.js` | Tavily 与 Firecrawl 合计的默认 extra source 数量。默认 `6`。 |
 | `GROK_SOURCE_CHARS` | `sourceChars` | 否 | `search.js` | 每条 source stdout snippet 长度。默认 `400`；`0` 表示不输出 snippet。 |
 | `GROK_MAX_SOURCES` | `maxSources` | 否 | `search.js` | stdout 返回的 source card 数量上限。默认 `12`；被裁剪的完整列表落盘到 `sources.raw_path`。 |
 | `GROK_DEADLINE_SECONDS` | `deadlineSeconds` | 否 | 所有脚本 | 单条命令总耗时上限（秒）。默认 `240`，`0` 表示禁用；超时会先输出 `DEADLINE_EXCEEDED` JSON 再退出。 |
-| `TAVILY_API_KEY` | `tavilyApiKey` | 否 | `search.js`、`fetch.js`、`map.js` | 启用 Tavily Search / Extract / Map。没有它时，search/fetch 仍可使用 Firecrawl Keyless，map 使用 Direct Map。 |
+| `TAVILY_API_KEY` | `tavilyApiKey` | 否 | `fetch.js`、`map.js` | 启用 Tavily Extract / Map。没有它时，fetch 仍可使用 Firecrawl Keyless，map 使用 Direct Map。 |
 | `TAVILY_API_URL` | `tavilyApiUrl` | 否 | Tavily 路径 | 默认 `https://api.tavily.com`。 |
-| `FIRECRAWL_API_KEY` | `firecrawlApiKey` | 否 | `search.js`、`fetch.js` | 可选。未配置时使用 Firecrawl Keyless；配置后使用独立账户额度和更高限流。 |
+| `FIRECRAWL_API_KEY` | `firecrawlApiKey` | 否 | `fetch.js` | 可选。未配置时使用 Firecrawl Keyless；配置后使用独立账户额度和更高限流。 |
 | `FIRECRAWL_API_URL` | `firecrawlApiUrl` | 否 | Firecrawl 路径 | 默认 `https://api.firecrawl.dev/v2`。 |
 | `GROK_OUTPUT_DIR` | `outputDir` | 否 | 所有脚本 | 覆盖长输出与运行记录的落盘目录。默认 `~/.cache/grok-search/outputs/`。 |
 | `GROK_STATE_DIR` | `stateDir` | 否 | 所有脚本 | 跨命令状态目录（Firecrawl 额度冷却文件 `firecrawl-cooldown.json`、15 分钟的 fetch 缓存 `fetch-cache/`）。默认 `~/.cache/grok-search/`。 |
@@ -208,11 +206,9 @@ OpenRouter 使用 `openrouter:web_search` server tool，不会给模型名追加
 
 ```bash
 ./scripts/search.js "What changed in the latest Node.js LTS?"
-./scripts/search.js --instructions "只要官方 changelog 的原文和日期，找不到就说" "node lts changelog"
-./scripts/search.js --platform GitHub "pi coding agent search skill"
-./scripts/search.js --responses-allowed-domains github.com "pi coding agent search skill"
-./scripts/search.js --extra 10 "latest pi coding agent docs"
-./scripts/search.js --no-extra "query"
+./scripts/search.js --instructions "只要官方 changelog 的原文和日期，找不到就说" "Node.js 最新 LTS 的 changelog 改了什么？"
+./scripts/search.js --platform GitHub "有哪些给 pi coding agent 用的搜索 skill？"
+./scripts/search.js --responses-allowed-domains github.com "有哪些给 pi coding agent 用的搜索 skill？"
 ./scripts/search.js --source-chars 200 "query"
 ./scripts/search.js --max-sources 8 "query"
 ./scripts/search.js --deadline 120 "query"
@@ -221,9 +217,11 @@ OpenRouter 使用 `openrouter:web_search` server tool，不会给模型名追加
 ./scripts/search.js --source x --responses-parallel-tool-calls false "query"   # 每 turn 一次工具调用，省费用
 ```
 
-`--instructions TEXT` 把"要什么"和"搜什么"分开：query 是 Tavily / Firecrawl 原样检索的关键词，指令只追加到发给 Grok 的 user message 末尾（system prompt 前缀不变，prompt cache 不受影响）；带指令时 query 前会加一行 `# Search query` 标题，否则短 query 会被当成时间上下文的一行而丢失（2026-09-08 实测 Grok 回答"未指定主题"）。`diagnostics.options.instructions_chars` 记录长度，运行记录保存全文；没有配置项默认值。
+query 只发给 Grok，直接写成要问的问题，把要的字段一起写进去。2026-10-19 同一批题对照（`benchmarks/supplement-compare.mjs`）：整句问题和"短关键词 + `--instructions`"在 13 道时效题上都全对，6 道调研题互有胜负，整句略省一点费用。
 
-`--responses-allowed-domains` / `--responses-excluded-domains` 同时作用于三个通道：Grok 的 `web_search` filters、Tavily 的 `include_domains` / `exclude_domains`、Firecrawl 的 `includeDomains` / `excludeDomains`。上游仍漏进来的域外 extra 不丢弃，但排到所有 Grok 结果之后；`diagnostics.options.extra_domain_filter` 取 `pushed` / `demoted` / `none`，extra 的 provider attempt 带 `off_domain` 计数。
+`--instructions TEXT` 可选，交代怎么回答（格式、语言、不要什么）。指令追加到发给 Grok 的 user message 末尾（system prompt 前缀不变，prompt cache 不受影响）；带指令时 query 前会加一行 `# Search query` 标题，否则短 query 会被当成时间上下文的一行而丢失（2026-09-08 实测 Grok 回答"未指定主题"）。`diagnostics.options.instructions_chars` 记录长度，运行记录保存全文；没有配置项默认值。
+
+`--responses-allowed-domains` / `--responses-excluded-domains` 作为 `filters` 传给 Grok 的 `web_search` 工具。
 
 ### 检索源
 
@@ -241,7 +239,6 @@ OpenRouter 使用 `openrouter:web_search` server tool，不会给模型名追加
 - **命令行**的 X 过滤参数会把未显式指定的 `--source` 提升为 `both`；与显式 `--source web` 同时出现则报 `SEARCH_SOURCE_CONFLICT`。配置文件里的 X 过滤项只在 X 检索开启时生效，不会自己把档位提升上去。
 - `--responses-x-search` 保留为 `--source both` 的别名。
 - X 检索计费 $5 / 1k calls，与 web search 同价，实际次数见 `diagnostics.responses_x_search_calls`。
-- Tavily / Firecrawl extra 源只搜网页，不搜 X。`--source x` 下两家默认关闭（`diagnostics.options.extra_mode` 为 `off-x-only`），显式 `--extra N` 可开启；`--source both` 仍默认开启。
 - OpenRouter 会自动把 `x_search` 挂在 native web search 上，`--source` 在该路径下只是提示，未被强制执行时会写入 `diagnostics.warnings`。
 
 X citation 只返回裸 URL、且 `title` 是 inline citation 序号，因此 source card 会从 URL 还原署名：
@@ -263,22 +260,20 @@ X citation 只返回裸 URL、且 `title` 是 inline citation 序号，因此 so
 `search.js` 只使用 Responses 协议，以 `stream:false` 调用 `{GROK_API_URL}/responses`，启用 provider-native web search，并返回：
 
 - `answer.text`、`answer.chars`、`answer.original_chars`、`answer.truncated`、`answer.full_path`
-- `sources.items`：单份去重合并后的短 source card 列表，默认最多 `12` 条（`--max-sources` 可调）。超出上限时用 Reciprocal Rank Fusion（RRF，k=60）合并 Grok 与各 extra provider 的结果列表再取前 N 条：Grok 列表内按 `citation` > `opened: true`（Grok 用 `open_page` 成功读过的页面）> `searched` 排，Tavily、Firecrawl 各按自己返回的顺序；多路都返回的 URL 每一路都计分；域外 extra 排在最后。答案引用的链接很多时，有些 `citation` 只出现在 `answer.text` 里。同一 URL 跨通道出现时合并成一张卡，`merged_from` 列出补充了字段的 provider；`"1"`、`[2]` 这类序号标题视为缺失：有真标题就替换，没有就不输出 `title`
+- `sources.items`：Grok 来源的短 source card 列表，每个页面一张（同一条 X 帖子不同 URL 形式也只一张），默认最多 `12` 条（`--max-sources` 可调）。超出上限时按 `citation` > `opened: true`（Grok 用 `open_page` 成功读过的页面）> `searched` 挑选，同类按响应里的顺序，输出时保持原顺序。答案引用的链接很多时，有些 `citation` 只出现在 `answer.text` 里。`"1"`、`[2]` 这类序号标题视为缺失：Grok 的搜索列表里有真标题就替换，没有就不输出 `title`
 - `sources.returned` / `sources.total` / `sources.omitted`：让调用方明确知道是否被截断
 - `sources.raw_path`：总是有值（除非 `GROK_RUN_LOG=off`），指向本次调用的运行记录：脱敏 argv、query、instructions、生效 options、完整 answer、未裁剪的 source 列表、`grok_tool_calls`、diagnostics；失败与 `DEADLINE_EXCEEDED` 也会写
 - `sources.raw`，仅在使用 `--full-sources` 时出现
 - `diagnostics.responses_model`：中转实际返回的模型；与请求的不同时 `warnings` 里会有一条（2026-09-08 发现某中转对每次 `grok-4.5` 请求都返回 `grok-4.5-build`，调用次数和费用是 2–3 倍）
 - `diagnostics.grok_endpoint`、`diagnostics.usage` / `diagnostics.cost_usd`（provider 返回时）、`diagnostics.responses_*`（`responses_tool_calls` 为 `{ total, upstream: { web, x } | null, trace: { web, x }, by_action, failed? }` 摘要，失败的调用只列在 `failed`、不计入其余计数，完整列表在 `raw_path` 中）、`diagnostics.search_budget`（prompt 里的软预算与实际次数并列，`enforced: false`；`used_web` / `used_x` / `used_total` 是计费调用数，含打开页面，`exceeded` 只比较 `used_searches` / `used_x_searches` 这两个检索次数）、`diagnostics.warnings`、`diagnostics.provider_attempts`、`diagnostics.options`、`diagnostics.duration_ms`、`diagnostics.searched_at`
 
-默认会同时发起 Grok Responses、Tavily Search（配置 key 时）和 Firecrawl Search。三路并行，Tavily/Firecrawl 结果始终作为独立补充信源，不会注入 Grok input。
+2026-10-19 之前，Tavily Search 和 Firecrawl Search 会用同一个 query 和 Grok 并行检索，结果作为额外来源卡片附在后面。那天删掉了：一个月的真实会话里（245 次搜索），agent 只用到其中 10 个只来自它们的网址；Grok 出错时它们从没顶上过；它们每月还要用掉约 470 Firecrawl credits，而 fetch 正需要这些额度。数据和过程见 `benchmarks/search-extra-compare.mjs`、`benchmarks/supplement-compare.mjs`。`--extra` / `--no-extra` 随之移除，传入会报未知参数。
 
-`--extra N` 表示 Tavily 与 Firecrawl 合计的结果目标数，默认 `6`。两家都可用时平均分配，奇数优先给 Tavily；没有 Tavily key 时全部交给 Firecrawl Keyless。`--no-extra` 会严格关闭两个外部搜索通道。
-
-当 Grok 明确返回额度耗尽（402、额度类错误码、正文提到 quota / credits / billing 的 429），而 extra sources 可用时，命令会返回标记为 `diagnostics.degraded: true` 的降级结果，`grok_error.code` 为 `QUOTA_EXHAUSTED`；普通 429 限流同样降级，但 code 是 `RATE_LIMITED`。`answer.text` 会明确说明当前仅为 Tavily/Firecrawl 原始搜索结果，`diagnostics.grok_error` 保留脱敏后的上游错误。其他认证、协议或服务错误不会被伪装成降级。
+Grok 失败一律报错。402、额度类错误码、正文提到 quota / credits / billing 的 429 报 `GROK_QUOTA_EXHAUSTED`（`diagnostics.grok_error.code` 为 `QUOTA_EXHAUSTED`）；重试后仍然 429 的普通限流报 `GROK_RATE_LIMITED`（`RATE_LIMITED`）；其他错误保留上游信息。
 
 Firecrawl Keyless 提供每月 1,000 credits，并受按 IP 的每日限额约束。配置 `FIRECRAWL_API_KEY` 不会增加免费计划的月度 credits，但能获得更高限流、独立账户额度和更多 API 能力。
 
-额度耗尽时 Firecrawl 返回 429 与 `reason: credits`、`retry_after_seconds`（通常数小时）。脚本不再重试，而是把 `{ until, auth_mode, reason, hit_at }` 写进 `<stateDir>/firecrawl-cooldown.json`；冷却期内 `search.js` 与 `fetch.js --provider auto` 直接跳过 Firecrawl（provider attempt 记 `skipped: true` 与 `cooldown until <ISO>`），search 的名额转给 Tavily，没有 Tavily 时 extra 为空并写 warning。显式 `--provider firecrawl` 仍会真打，成功后清除冷却。冷却按 `auth_mode` 区分，换上 API key 立即生效。
+额度耗尽时 Firecrawl 返回 429 与 `reason: credits`、`retry_after_seconds`（通常数小时）。脚本不再重试，而是把 `{ until, auth_mode, reason, hit_at }` 写进 `<stateDir>/firecrawl-cooldown.json`；冷却期内 `fetch.js --provider auto` 直接跳过 Firecrawl（provider attempt 记 `skipped: true` 与 `cooldown until <ISO>`）。显式 `--provider firecrawl` 仍会真打，成功后清除冷却。冷却按 `auth_mode` 区分，换上 API key 立即生效。
 
 通用重试规则：408 / 429 / 5xx 最多重试 3 次，`Retry-After`（header 或 Firecrawl 的 `retry_after_seconds`）在重试预算内照等，超出预算即停止而不是截短后继续；坏 JSON、`success:false`、403 等 4xx、scrape 超时都只请求一次。provider attempt 带 `requests`（实际 HTTP 次数）与 `duration_ms`。
 
@@ -361,7 +356,7 @@ map 成功输出使用 `urls` 表示发现的 URL。provider、response time、i
 
 设置 `GROK_OUTPUT_DIR` 可以覆盖该路径。每次运行都会 best-effort 清理输出目录中超过 30 天的 `grok-search-*` 文件。
 
-除 preview 溢出文件外，每次调用还会写一份运行记录 `grok-search-<ts>-run-<kind>-<label>-<rand>.json`（`schema_version: 2`，权限 0600），成功、失败、`DEADLINE_EXCEEDED` 都写；`GROK_RUN_LOG=off` 或 `runLog: false` 关闭。search 记录含脱敏 argv、query、instructions、生效 options、完整 answer、`answer_preamble`（答案标记前被切掉的过场话，没有标记时为 null）、未裁剪 sources、`grok_tool_calls`、diagnostics；fetch 记录含正文全文、metadata、provider_attempts；map 记录含 urls。记录在 stdout 截断之后才写，所以带着 agent 实际看到的 warnings，`printed_answer` / `printed_content` 记下 stdout 里正文的长度、是否截断和全文路径。`GROK_DEBUG_RAW=1` 或 `--full-sources` 时再附 `grok_raw`。
+除 preview 溢出文件外，每次调用还会写一份运行记录 `grok-search-<ts>-run-<kind>-<label>-<rand>.json`（`schema_version: 3`，权限 0600；2026-10-19 之前的 search 记录是 2，另有 `sources.extra` 和 `provider_raw`），成功、失败、`DEADLINE_EXCEEDED` 都写；`GROK_RUN_LOG=off` 或 `runLog: false` 关闭。search 记录含脱敏 argv、query、instructions、生效 options、完整 answer、`answer_preamble`（答案标记前被切掉的过场话，没有标记时为 null）、未裁剪 sources、`grok_tool_calls`、diagnostics；fetch 记录含正文全文、metadata、provider_attempts；map 记录含 urls。记录在 stdout 截断之后才写，所以带着 agent 实际看到的 warnings，`printed_answer` / `printed_content` 记下 stdout 里正文的长度、是否截断和全文路径。`GROK_DEBUG_RAW=1` 或 `--full-sources` 时再附 `grok_raw`。
 
 只有 preview 不够时才读取这些路径：
 
@@ -393,8 +388,8 @@ export GROK_API_KEY="your-key"
 
 - `GROK_API_URL 未配置`：使用 `search.js` 前需要设置 `GROK_API_URL`。
 - `GROK_API_KEY 未配置`：使用 `search.js` 前需要设置 `GROK_API_KEY`。
-- `GROK_QUOTA_EXHAUSTED`：Grok 额度耗尽且 extra 被关闭，或 Tavily/Firecrawl 都没有返回可用降级结果。
-- `GROK_RATE_LIMITED`：Grok 返回普通 429 限流（非额度信号），且没有可用降级结果。
+- `GROK_QUOTA_EXHAUSTED`：Grok 额度耗尽（402、额度类错误码、正文提到额度的 429）。
+- `GROK_RATE_LIMITED`：Grok 重试后仍返回普通 429 限流（非额度信号）。
 - provider attempt 出现 `skipped: true` 与 `cooldown until …`：Firecrawl 额度耗尽后的冷却期，删除 `<stateDir>/firecrawl-cooldown.json` 或显式 `--provider firecrawl` 可强制再试。
 - `TAVILY_API_KEY 未配置`：显式请求了 `--provider tavily`，但没有配置 Tavily key。
 - Direct Fetch 返回二进制 / 附件错误：目标 URL 不是文本页面，或对 direct fallback 来说太大。
@@ -405,7 +400,6 @@ export GROK_API_KEY="your-key"
 当前范围包括：
 
 - `search.js`
-- `search.js --extra N`
 - 带 Direct Fetch fallback 的 `fetch.js`
 - 带 Direct Map fallback 的 `map.js`
 - 长输出 preview 和完整输出文件

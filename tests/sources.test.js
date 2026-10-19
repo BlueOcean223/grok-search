@@ -1,16 +1,6 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
-import {
-  compactSource,
-  hostMatchesDomain,
-  isCitationMarker,
-  isOffDomainExtra,
-  mergeSources,
-  parseXPostUrl,
-  selectSources,
-  sourceCard,
-  sourceKey,
-} from "../scripts/lib/sources.js";
+import { compactSource, isCitationMarker, parseXPostUrl, selectSources, sourceCard, sourceKey } from "../scripts/lib/sources.js";
 import { inMapScope, mapScope, scopePattern } from "../scripts/lib/map-scope.js";
 
 assert.deepEqual(parseXPostUrl("https://x.com/xai/status/1975607901571199086"), {
@@ -46,65 +36,11 @@ assert.deepEqual(xCompacted, {
   x_post_id: "123",
 });
 
+// One constructor for every card: URL normalized, blanks left out, X attribution from the URL,
+// a marker or the URL itself dropped as a title.
 assert.deepEqual(
-  mergeSources([{ url: "https://A.example/path/" }], [{ url: "https://a.example/path#section" }, { url: "https://b.example/" }]).map(
-    (source) => source.url
-  ),
-  ["https://A.example/path/", "https://b.example/"]
-);
-
-// A duplicate URL fills in what the first record lacks: a marker title gives way to a real
-// one, the snippet is taken, and the contributing provider is recorded.
-const mergedCitation = mergeSources(
-  [{ provider: "grok-responses", source_type: "citation", url: "https://example.com/post", title: "1" }],
-  [{ provider: "firecrawl", url: "https://example.com/post/", title: "Great Post Title", snippet: "A useful description", score: 0.5 }]
-);
-assert.deepEqual(mergedCitation, [
-  {
-    provider: "grok-responses",
-    source_type: "citation",
-    url: "https://example.com/post",
-    title: "Great Post Title",
-    snippet: "A useful description",
-    score: 0.5,
-    merged_from: ["firecrawl"],
-    list_ranks: { grok: 0, firecrawl: 0 },
-  },
-]);
-// Existing real values are never overwritten, and an identical duplicate leaves no trace in
-// merged_from. list_ranks still records that Tavily returned the URL, for the card ranking.
-const keptTitle = mergeSources(
-  [{ provider: "grok-responses", source_type: "citation", url: "https://example.com/a", title: "Original", snippet: "kept" }],
-  [
-    { provider: "tavily", url: "https://example.com/other" },
-    { provider: "tavily", url: "https://example.com/a", title: "Other", snippet: "ignored" },
-  ]
-);
-assert.equal(keptTitle[0].title, "Original");
-assert.equal(keptTitle[0].snippet, "kept");
-assert.equal(Object.hasOwn(keptTitle[0], "merged_from"), false);
-assert.deepEqual(keptTitle[0].list_ranks, { grok: 0, tavily: 1 });
-assert.equal(Object.hasOwn(compactSource(keptTitle[0]), "list_ranks"), false);
-// One X post under two URL forms is one card: xAI's /i/status/<id> citation names no author,
-// the answer's /<handle>/status/<id> link does, and the handle lands on the merged card.
-const xMerged = mergeSources([
-  { provider: "grok-responses", source_type: "citation", tool: "x_search", url: "https://x.com/i/status/2099958388230873165", x_post_id: "2099958388230873165" },
-  { provider: "grok-responses", source_type: "citation", url: "https://x.com/trq212/status/2099958388230873165", title: "@trq212", x_handle: "trq212", x_post_id: "2099958388230873165" },
-  { provider: "grok-responses", source_type: "citation", url: "https://x.com/trq212/status/1" },
-  { provider: "grok-responses", source_type: "citation", url: "https://x.com/trq212" },
-]);
-assert.deepEqual(xMerged.map((source) => source.url), [
-  "https://x.com/i/status/2099958388230873165",
-  "https://x.com/trq212/status/1",
-  "https://x.com/trq212",
-]);
-assert.equal(xMerged[0].x_handle, "trq212");
-assert.equal(xMerged[0].title, "@trq212");
-// One constructor for every channel's cards: URL normalized, blanks left out, X attribution from
-// the URL, a marker or the URL itself dropped as a title.
-assert.deepEqual(
-  sourceCard(" https://Example.com/a/#top ", { provider: "tavily", title: " T ", snippet: "", published_date: "2026-01-02", score: 0.5 }),
-  { provider: "tavily", url: "https://example.com/a", title: "T", published_date: "2026-01-02", score: 0.5 }
+  sourceCard(" https://Example.com/a/#top ", { provider: "grok-responses", source_type: "searched", title: " T ", snippet: "" }),
+  { provider: "grok-responses", url: "https://example.com/a", source_type: "searched", title: "T" }
 );
 assert.deepEqual(
   sourceCard("https://x.com/i/status/5", { provider: "grok-responses", source_type: "citation", tool: "x_search", title: "1" }),
@@ -116,52 +52,35 @@ assert.deepEqual(
 );
 assert.equal(sourceCard("https://x.com/xai/status/5", { provider: "grok-responses", title: "Real" }).title, "Real");
 assert.equal(sourceCard("https://example.com/p", { provider: "grok-responses", title: "https://example.com/p" }).title, undefined);
-assert.equal(sourceCard("", { provider: "tavily" }), null);
-// The identity cards are deduplicated by, in Grok's lists and across channels alike.
+assert.equal(sourceCard("", { provider: "grok-responses" }), null);
+// The identity cards are deduplicated by: one key per X post whatever the URL form.
 assert.equal(sourceKey("https://x.com/i/status/5"), sourceKey("https://x.com/xai/status/5/"));
 assert.equal(sourceKey("https://Example.com/a/"), "https://example.com/a");
 assert.equal(isCitationMarker("1"), true);
 assert.equal(isCitationMarker("[12]"), true);
 assert.equal(isCitationMarker("Issue #12"), false);
 
-// Domain matching is by host suffix; extras outside the requested domains are recognised,
-// Grok's own sources never are (its filter is applied server-side).
-assert.equal(hostMatchesDomain("gist.github.com", "github.com"), true);
-assert.equal(hostMatchesDomain("github.com", "github.com"), true);
-assert.equal(hostMatchesDomain("notgithub.com", "github.com"), false);
-assert.equal(hostMatchesDomain("raw.githubusercontent.com", "github.com"), false);
-const filters = { allowedDomains: ["github.com"], excludedDomains: [] };
-assert.equal(isOffDomainExtra({ provider: "firecrawl", url: "https://medium.com/p" }, filters), true);
-assert.equal(isOffDomainExtra({ provider: "firecrawl", url: "https://github.com/o/r" }, filters), false);
-assert.equal(isOffDomainExtra({ provider: "grok-responses", source_type: "searched", url: "https://medium.com/p" }, filters), false);
-assert.equal(isOffDomainExtra({ provider: "tavily", url: "https://reddit.com/r/x" }, { allowedDomains: [], excludedDomains: ["reddit.com"] }), true);
-assert.equal(isOffDomainExtra({ provider: "tavily", url: "https://medium.com/p" }, { allowedDomains: [], excludedDomains: [] }), false);
-
-// compactSource carries the new flags through.
+// compactSource carries the flags through and leaves out fields cards do not have.
 assert.deepEqual(
-  compactSource({ provider: "grok-responses", url: "https://example.com/o", source_type: "searched", opened: true, merged_from: ["tavily"] }),
-  { provider: "grok-responses", url: "https://example.com/o", source_type: "searched", opened: true, merged_from: ["tavily"] }
+  compactSource({ provider: "grok-responses", url: "https://example.com/o", source_type: "searched", opened: true }),
+  { provider: "grok-responses", url: "https://example.com/o", source_type: "searched", opened: true }
 );
 
 const compacted = compactSource(
   {
-    provider: "tavily",
+    provider: "grok-responses",
     title: "  Example  ",
     url: "https://example.com/a",
     snippet: "abcdefghijklmnopqrstuvwxyz",
-    score: 0.91,
-    published_date: "2026-06-22",
-    raw_extra: { hidden: true },
+    raw_field: { hidden: true },
   },
   { sourceChars: 10 }
 );
 assert.deepEqual(compacted, {
-  provider: "tavily",
+  provider: "grok-responses",
   url: "https://example.com/a",
   title: "Example",
   snippet: "abcdefghij",
-  score: 0.91,
-  published_date: "2026-06-22",
 });
 assert.equal(Object.hasOwn(compacted, "description"), false);
 assert.equal(Object.hasOwn(compacted, "content"), false);
@@ -169,15 +88,15 @@ assert.equal(Object.hasOwn(compacted, "content"), false);
 const noSnippet = compactSource({ provider: "grok", url: "https://example.com/b", snippet: "hidden" }, { sourceChars: 0 });
 assert.deepEqual(noSnippet, { provider: "grok", url: "https://example.com/b" });
 
+// Over the cap, cards are picked in Grok's order (cited > opened > searched, input order within
+// each) and printed in input order.
 const rankedSources = [
   { url: "https://e.example/1", source_type: "searched" },
-  { url: "https://e.example/2", provider: "tavily" },
+  { url: "https://e.example/2", source_type: "searched", opened: true },
   { url: "https://e.example/3", source_type: "citation" },
   { url: "https://e.example/4", source_type: "searched" },
 ];
 const capped = selectSources(rankedSources, { maxSources: 2 });
-// The first of Grok's list (the citation) and of Tavily's come before Grok's searched-only
-// ones; the picked subset keeps the original order.
 assert.deepEqual(
   capped.items.map((source) => source.url),
   ["https://e.example/2", "https://e.example/3"]
@@ -185,93 +104,16 @@ assert.deepEqual(
 assert.equal(capped.total, 4);
 assert.equal(capped.returned, 2);
 assert.equal(capped.omitted, 2);
+assert.deepEqual(
+  selectSources(rankedSources, { maxSources: 3 }).items.map((source) => source.url),
+  ["https://e.example/1", "https://e.example/2", "https://e.example/3"]
+);
 
 const uncapped = selectSources(rankedSources, { maxSources: 10 });
 assert.equal(uncapped.returned, 4);
 assert.equal(uncapped.omitted, 0);
+assert.deepEqual(uncapped.items, rankedSources);
 assert.deepEqual(selectSources([], { maxSources: 5 }), { items: [], total: 0, returned: 0, omitted: 0 });
-
-// Cards are picked by Reciprocal Rank Fusion: Grok's list and each extra provider's take turns,
-// so extras show even when the citations alone would fill the cards.
-const fused = [
-  ...[1, 2, 3, 4, 5, 6].map((n) => ({ url: `https://g.example/cited-${n}`, source_type: "citation" })),
-  { url: "https://t.example/1", provider: "tavily" },
-  { url: "https://t.example/2", provider: "tavily" },
-  { url: "https://f.example/1", provider: "firecrawl" },
-];
-assert.deepEqual(
-  selectSources(fused, { maxSources: 6 }).items.map((source) => source.url),
-  [
-    "https://g.example/cited-1",
-    "https://g.example/cited-2",
-    "https://g.example/cited-3",
-    "https://t.example/1",
-    "https://t.example/2",
-    "https://f.example/1",
-  ]
-);
-
-// Grok's list runs cited > opened > searched whatever the input order, and a URL an extra
-// provider also returned (merged into Grok's card) scores in both lists.
-const grokOrder = mergeSources(
-  [
-    { url: "https://g.example/searched", source_type: "searched" },
-    { url: "https://g.example/opened", source_type: "searched", opened: true },
-    { url: "https://g.example/cited", source_type: "citation" },
-    { url: "https://g.example/agreed", source_type: "searched" },
-  ],
-  [
-    { url: "https://g.example/agreed", provider: "tavily" },
-    { url: "https://t.example/1", provider: "tavily" },
-  ]
-);
-assert.deepEqual(
-  selectSources(grokOrder, { maxSources: 2 }).items.map((source) => source.url),
-  ["https://g.example/cited", "https://g.example/agreed"]
-);
-assert.deepEqual(
-  selectSources(grokOrder, { maxSources: 4 }).items.map((source) => source.url),
-  ["https://g.example/opened", "https://g.example/cited", "https://g.example/agreed", "https://t.example/1"]
-);
-
-// The agreement counts whether or not the duplicate brought a field. Firecrawl's first result
-// is Grok's twelfth citation with nothing new: it is shown (before list_ranks it was dropped
-// while Firecrawl's second and third results were shown), and Grok's eleventh gives way.
-const twelve = Array.from({ length: 12 }, (_, i) => ({
-  provider: "grok-responses",
-  source_type: "citation",
-  url: `https://g.example/${i + 1}`,
-  title: `G${i + 1}`,
-  snippet: "s",
-}));
-const agreedPicked = selectSources(
-  mergeSources(twelve, [
-    { provider: "firecrawl", url: "https://g.example/12", title: "Same", snippet: "same" },
-    { provider: "firecrawl", url: "https://f.example/2", title: "F2", snippet: "d" },
-    { provider: "firecrawl", url: "https://f.example/3", title: "F3", snippet: "d" },
-  ]),
-  { maxSources: 12 }
-).items.map((source) => source.url);
-assert.equal(agreedPicked.includes("https://g.example/12"), true);
-assert.equal(agreedPicked.includes("https://g.example/11"), false);
-
-// An extra result outside the requested domains goes last, though it tops its provider's list.
-const domainRanked = [
-  { url: "https://github.com/cited", source_type: "citation" },
-  { url: "https://github.com/searched", source_type: "searched" },
-  { url: "https://gist.github.com/extra", provider: "tavily" },
-  { url: "https://medium.com/off", provider: "firecrawl" },
-];
-const domainFilters = { allowedDomains: ["github.com"], excludedDomains: [] };
-assert.deepEqual(
-  selectSources(domainRanked, { maxSources: 3, ...domainFilters }).items.map((source) => source.url),
-  ["https://github.com/cited", "https://github.com/searched", "https://gist.github.com/extra"]
-);
-// Without filters it is an ordinary first result.
-assert.deepEqual(
-  selectSources(domainRanked, { maxSources: 3 }).items.map((source) => source.url),
-  ["https://github.com/cited", "https://gist.github.com/extra", "https://medium.com/off"]
-);
 
 // A map stays under the URL's path; a URL that names a file maps its directory, since nothing
 // is under a file. A version segment is a directory, not a file.

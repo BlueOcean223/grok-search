@@ -1,6 +1,6 @@
 /**
  * The Search command behind one interface: `runSearch(args, config, adapters)` takes the parsed
- * arguments, the loaded config and the three search channels, and returns the stdout object
+ * arguments, the loaded config and the Grok search channel, and returns the stdout object
  * (writing the run record and any full-answer file on the way). scripts/search.js only parses
  * argv and prints.
  */
@@ -12,14 +12,11 @@ import {
   usesWebSearch,
   usesXSearch,
 } from "./config.js";
-import { activeFirecrawlCooldown, cooldownSkipMessage } from "./cooldown.js";
 import { searchGrokResponses } from "./grok-responses.js";
 import { emitText, runRecordBase, runRecordPath, STDOUT_BUDGET_BYTES, writeRunRecord } from "./output.js";
-import { firecrawlAuthMode, firecrawlSearch } from "./firecrawl.js";
-import { attemptFrom, skippedResult, timed } from "./provider-result.js";
-import { tavilySearch } from "./tavily.js";
+import { attemptFrom } from "./provider-result.js";
 import { getProxyState } from "./proxy.js";
-import { buildRawSourcesPayload, compactSources, isOffDomainExtra, mergeSources, selectSources } from "./sources.js";
+import { buildRawSourcesPayload, compactSources, selectSources } from "./sources.js";
 
 export const DEFAULT_MAX_CHARS = 30000;
 
@@ -38,7 +35,7 @@ export const SEARCH_OPTIONS = {
     type: "string",
     value: "TEXT",
     group: "Research instructions",
-    help: "What Grok should return (fields, language, what to leave out). Only\nGrok sees it; Tavily/Firecrawl still search the plain query.",
+    help: "How to answer, kept apart from the question: fields, language, format,\nwhat to leave out",
   },
   // Rejected in the parser so an unknown source fails like every other argument error, before
   // config load and output-dir cleanup.
@@ -119,7 +116,7 @@ export const SEARCH_OPTIONS = {
     type: "list",
     value: "LIST",
     group: "Domain filters",
-    help: "Comma-separated domains to search (max 5). Grok, Tavily and Firecrawl all\nget them; the command line may only narrow a configured list",
+    help: "Comma-separated domains to search (max 5); the command line may only\nnarrow a configured list",
   },
   responsesExcludedDomains: {
     flag: "--responses-excluded-domains",
@@ -128,8 +125,6 @@ export const SEARCH_OPTIONS = {
     group: "Domain filters",
     help: "Comma-separated domains to leave out (max 5)",
   },
-  extra: { flag: "--extra", type: "int", min: 0, value: "N", group: "Extra sources", help: "Total Tavily/Firecrawl results (default 6; 0 turns them off)" },
-  noExtra: { flag: "--no-extra", type: "flag", group: "Extra sources", help: "No Tavily/Firecrawl results" },
   sourceChars: { flag: "--source-chars", type: "int", min: 0, value: "N", group: "Output", config: "sourceChars", help: "Snippet length per source card (default 400)" },
   maxSources: {
     flag: "--max-sources",
@@ -140,7 +135,7 @@ export const SEARCH_OPTIONS = {
     config: "maxSources",
     help: "Cap on source cards in stdout (default 12); the rest are in the run record",
   },
-  fullSources: { flag: "--full-sources", type: "flag", group: "Output", help: "Attach every source and the raw provider payloads as sources.raw" },
+  fullSources: { flag: "--full-sources", type: "flag", group: "Output", help: "Attach every Grok source and tool call as sources.raw" },
   maxChars: {
     flag: "--max-chars",
     type: "int",
@@ -157,10 +152,6 @@ export const SEARCH_POSITIONAL = { name: "query", rest: true, required: "缺少 
 
 /** Checks across fields once every flag is in. */
 export function finishSearchArgs(args) {
-  if (args.extra != null && args.noExtra) throw new Error("--extra 与 --no-extra 不能同时使用");
-  if (args.noExtra) args.extra = 0;
-  args.extraMode = args.extra === 0 ? "off" : args.extra != null ? "explicit" : "auto";
-  delete args.noExtra;
   if (args.xFromDate && args.xToDate && args.xFromDate > args.xToDate) throw new Error("--x-from-date 不能晚于 --x-to-date");
 }
 
@@ -170,76 +161,6 @@ const GROK_FAILURE_LABELS = {
   quota: { code: "QUOTA_EXHAUSTED", errorCode: "GROK_QUOTA_EXHAUSTED", label: "额度已耗尽", warning: "Grok Responses quota was exhausted." },
   rate_limit: { code: "RATE_LIMITED", errorCode: "GROK_RATE_LIMITED", label: "触发限流", warning: "Grok Responses was rate limited." },
 };
-
-function extraAllocation(limit, config, { firecrawlAvailable = true } = {}) {
-  if (limit <= 0) return { tavily: 0, firecrawl: 0 };
-  if (!config.tavilyApiKey) return { tavily: 0, firecrawl: firecrawlAvailable ? limit : 0 };
-  if (!firecrawlAvailable) return { tavily: limit, firecrawl: 0 };
-  const tavily = Math.ceil(limit / 2);
-  return { tavily, firecrawl: limit - tavily };
-}
-
-/**
- * Independent Tavily / Firecrawl searches. Domain filters are the same ones Grok's web_search
- * gets: when the caller scopes a search to github.com, extras that wander off to blogs and
- * video sites only displace in-scope candidates. A Firecrawl quota cooldown hands its share to
- * Tavily when a key exists, otherwise the channel is skipped rather than re-failing.
- */
-async function extraSources(query, limit, config, filters, { tavily, firecrawl }) {
-  const warnings = [];
-  const providerRaw = {};
-  if (limit <= 0) {
-    return { sources: [], warnings, provider_attempts: [], provider_raw: providerRaw, allocation: { tavily: 0, firecrawl: 0 } };
-  }
-
-  const firecrawlMode = firecrawlAuthMode(config);
-  const cooldown = await activeFirecrawlCooldown(config, firecrawlMode);
-  const allocation = extraAllocation(limit, config, { firecrawlAvailable: !cooldown });
-
-  // Timed per provider so the attempt says which side made the caller wait.
-  const jobs = [];
-  if (allocation.tavily > 0) jobs.push(timed(tavily(query, allocation.tavily, config, filters)));
-  if (allocation.firecrawl > 0) jobs.push(timed(firecrawl(query, allocation.firecrawl, config, filters)));
-  const results = await Promise.all(jobs);
-  const sources = [];
-  const providerAttempts = [];
-
-  const hasFilters = Boolean(filters.allowedDomains?.length || filters.excludedDomains?.length);
-  for (const result of results) {
-    const attempt = attemptFrom(result, { count: result.sources?.length || 0 });
-    if (result.ok && hasFilters) {
-      attempt.off_domain = (result.sources || []).filter((source) => isOffDomainExtra(source, filters)).length;
-    }
-    providerAttempts.push(attempt);
-    if (result.raw !== undefined) providerRaw[result.provider] = result.raw;
-    if (result.ok) sources.push(...(result.sources || []));
-    else warnings.push(`${result.provider} extra source search failed: ${result.error || "unknown error"}`);
-  }
-
-  if (cooldown) {
-    const message = cooldownSkipMessage(cooldown);
-    providerAttempts.push(attemptFrom(skippedResult("firecrawl", message, { auth_mode: firecrawlMode }), { count: 0 }));
-    warnings.push(`firecrawl extra source search skipped: ${message}`);
-  }
-
-  return {
-    sources: sources.slice(0, limit),
-    warnings,
-    provider_attempts: providerAttempts,
-    provider_raw: providerRaw,
-    allocation,
-  };
-}
-
-function resolveExtra(args, config, searchSource) {
-  if (args.extraMode === "off") return { limit: 0, mode: "off" };
-  if (args.extraMode === "explicit") return { limit: args.extra, mode: "explicit" };
-  // Tavily and Firecrawl only search the web. On an X-only search their results are off-topic
-  // by construction (6 of 6 in the 2026-09-08 side-by-side) and still bill credits, so they
-  // stay off unless the caller asks for them with --extra N.
-  if (usesXSearch(searchSource) && !usesWebSearch(searchSource)) return { limit: 0, mode: "off-x-only" };
-  return { limit: config.defaultExtra, mode: "auto" };
-}
 
 function dedupeFilterValues(values) {
   const byKey = new Map();
@@ -498,10 +419,9 @@ async function grokChannel(args, config, searchOptions, searchGrok) {
 }
 
 /**
- * Only two Grok failures are worth degrading to raw extras for: an exhausted quota (nothing
- * will change until someone pays) and a rate limit that survived the retries. They must be
- * reported as what they are, though; calling a transient 429 "quota exhausted" sends the
- * user to check billing for nothing.
+ * Two Grok failures get an error code of their own: an exhausted quota (nothing will change
+ * until someone pays) and a rate limit that survived the retries. They must be reported as what
+ * they are; calling a transient 429 "quota exhausted" sends the user to check billing for nothing.
  */
 function classifyGrokFailure(error) {
   if (error?.status === 402) return "quota";
@@ -515,38 +435,7 @@ function grokFailureAttempt(config, error) {
   return attemptFrom({ provider: `grok-responses:${config.apiProvider}`, ok: false, error: error.message, requests: error.requests }, { count: 0 });
 }
 
-function clipText(value, max = 800) {
-  const text = String(value || "").trim();
-  if (!text) return "";
-  return text.length > max ? `${text.slice(0, max).trimEnd()}…` : text;
-}
-
-function degradedAnswer(sources, label) {
-  const lines = [
-    `> ⚠️ Grok Responses ${label}。以下为 Tavily / Firecrawl 原始搜索结果，未经 Grok 综合生成。`,
-    "",
-  ];
-  const groups = new Map();
-  for (const source of sources) {
-    const provider = source.provider || "search";
-    if (!groups.has(provider)) groups.set(provider, []);
-    groups.get(provider).push(source);
-  }
-  for (const [provider, items] of groups) {
-    lines.push(`## ${provider === "tavily" ? "Tavily" : provider === "firecrawl" ? "Firecrawl" : provider}`);
-    lines.push("");
-    for (const [index, source] of items.entries()) {
-      const title = String(source.title || `Result ${index + 1}`).trim();
-      lines.push(`${index + 1}. [${title}](${source.url})`);
-      const snippet = clipText(source.snippet);
-      if (snippet) lines.push(`   ${snippet.replace(/\s+/g, " ")}`);
-    }
-    lines.push("");
-  }
-  return lines.join("\n").trim();
-}
-
-function failureDiagnostics(config, searchOptions, extraOptions, extra, error, { failure = null } = {}) {
+function failureDiagnostics(config, searchOptions, error, { failure = null } = {}) {
   const labels = failure ? GROK_FAILURE_LABELS[failure] : null;
   const warning = labels ? labels.warning : `Responses search failed: ${error.message}`;
   // An empty answer still has usage, cost and a served model on it; only its warnings are
@@ -556,128 +445,67 @@ function failureDiagnostics(config, searchOptions, extraOptions, extra, error, {
     grok_endpoint: "responses",
     ...measured,
     ...(labels ? { grok_error: { code: labels.code, message: error.message } } : {}),
-    warnings: [warning, ...(extra?.warnings || []), ...(error?.diagnostics?.warnings || [])],
-    provider_attempts: [grokFailureAttempt(config, error), ...(extra?.provider_attempts || [])],
+    warnings: [warning, ...(error?.diagnostics?.warnings || [])],
+    provider_attempts: [grokFailureAttempt(config, error)],
     options: {
       api_provider: config.apiProvider,
-      extra: extraOptions.limit,
-      extra_mode: extraOptions.mode,
-      extra_allocation: extra?.allocation || { tavily: 0, firecrawl: 0 },
-      firecrawl_auth_mode: extraOptions.limit > 0 ? firecrawlAuthMode(config) : null,
       ...responsesDiagnosticOptions(searchOptions),
     },
   };
 }
 
+/** The Grok failure as the error the command reports, with what the call measured. */
+function grokFailure(config, searchOptions, error) {
+  const failure = classifyGrokFailure(error);
+  if (!failure) {
+    error.diagnostics = failureDiagnostics(config, searchOptions, error);
+    return error;
+  }
+  const labels = GROK_FAILURE_LABELS[failure];
+  const reported = new Error(`Grok Responses ${labels.label}: ${error.message}`);
+  reported.code = labels.errorCode;
+  reported.diagnostics = failureDiagnostics(config, searchOptions, error, { failure });
+  return reported;
+}
+
 /**
- * The Search command: Grok Responses and the extra providers in parallel, the Grok quota
- * fallback, source cards merged, picked and compacted, the answer fitted to the stdout budget,
- * and the run record. Returns the stdout object. `args` are the parsed flags with their config
- * defaults applied (applyConfigDefaults in cli.js); `adapters` are the three search channels,
- * fakes in tests, nothing from the CLI.
+ * The Search command: the Grok Responses search, its source cards picked and compacted, the
+ * answer fitted to the stdout budget, and the run record. Returns the stdout object. `args` are
+ * the parsed flags with their config defaults applied (applyConfigDefaults in cli.js);
+ * `adapters.grok` replaces the Grok channel, a fake in tests, nothing from the CLI.
+ *
+ * Tavily and Firecrawl used to search the same query beside Grok. Agents used 10 of their 832
+ * extra-only URLs over a month of real sessions (2026-09-20 to 10-19, 245 searches), they never
+ * stood in for a failed Grok call, and they spent about 470 Firecrawl credits a month that
+ * fetch needs; they were removed on 2026-10-19 and serve fetch and map only.
  */
 export async function runSearch(args, config, adapters = {}) {
-  const { grok: searchGrok = searchGrokResponses, tavily = tavilySearch, firecrawl = firecrawlSearch } = adapters;
+  const { grok: searchGrok = searchGrokResponses } = adapters;
   const startedAtMs = Date.now();
   const searchOptions = resolveSearchOptions(args, config);
   const sourceChars = args.sourceChars;
   const maxSources = args.maxSources;
-  const extraOptions = resolveExtra(args, config, searchOptions.searchSource);
-  const grokPromise = grokChannel(args, config, searchOptions, searchGrok).then(
-    (value) => ({ ok: true, value }),
-    (error) => ({ ok: false, error })
-  );
-  const [grokResult, extra] = await Promise.all([
-    grokPromise,
-    extraSources(
-      args.query,
-      extraOptions.limit,
-      config,
-      { allowedDomains: searchOptions.allowedDomains, excludedDomains: searchOptions.excludedDomains },
-      { tavily, firecrawl }
-    ),
-  ]);
 
   let grok;
-  let degraded = false;
-  let grokError = null;
-  if (grokResult.ok) {
-    grok = grokResult.value;
-  } else {
-    const failure = classifyGrokFailure(grokResult.error);
-    if (!failure) {
-      grokResult.error.diagnostics = failureDiagnostics(config, searchOptions, extraOptions, extra, grokResult.error);
-      throw grokResult.error;
-    }
-    const labels = GROK_FAILURE_LABELS[failure];
-    if (extraOptions.limit <= 0 || !extra.sources.length) {
-      const error = new Error(
-        extraOptions.mode === "off-x-only"
-          ? `Grok Responses ${labels.label}；--source x 下 extra sources 默认关闭（传 --extra N 可开启），无法降级`
-          : extraOptions.limit <= 0
-            ? `Grok Responses ${labels.label}；extra sources 已显式关闭，无法降级`
-            : `Grok Responses ${labels.label}，且 Tavily/Firecrawl 未返回可用结果`
-      );
-      error.code = labels.errorCode;
-      error.diagnostics = failureDiagnostics(config, searchOptions, extraOptions, extra, grokResult.error, { failure });
-      throw error;
-    }
-    degraded = true;
-    grokError = { code: labels.code, message: grokResult.error.message };
-    grok = {
-      endpoint: "responses",
-      model: searchOptions.model,
-      answer: degradedAnswer(extra.sources, labels.label),
-      sources: [],
-      tool_calls: [],
-      warnings: [
-        `${labels.warning} answer.text lists the raw Tavily/Firecrawl results; Grok did not write it.`,
-      ],
-      provider_attempts: [grokFailureAttempt(config, grokResult.error)],
-      diagnostics: {},
-      raw_content_chars: 0,
-    };
+  try {
+    grok = await grokChannel(args, config, searchOptions, searchGrok);
+  } catch (error) {
+    throw grokFailure(config, searchOptions, error);
   }
 
-  const warnings = [...searchSourceWarnings(searchOptions, config), ...grok.warnings, ...extra.warnings];
-  const providerAttempts = [...grok.provider_attempts, ...extra.provider_attempts];
-  const rawGrokSources = grok.sources;
-  const rawExtraSources = extra.sources;
-  const rawMergedSources = mergeSources(rawGrokSources, rawExtraSources);
-  const selected = selectSources(rawMergedSources, {
-    maxSources,
-    allowedDomains: searchOptions.allowedDomains,
-    excludedDomains: searchOptions.excludedDomains,
-  });
+  const warnings = [...searchSourceWarnings(searchOptions, config), ...grok.warnings];
+  const selected = selectSources(grok.sources, { maxSources });
   const itemsCompact = compactSources(selected.items, { sourceChars });
-  const mergedCompactFull = compactSources(rawMergedSources, { sourceChars });
+  const allCompact = compactSources(grok.sources, { sourceChars });
 
   const createdAt = new Date().toISOString();
-  const rawPayload = buildRawSourcesPayload({
-    query: args.query,
-    grok: rawGrokSources,
-    extra: rawExtraSources,
-    providerRaw: extra.provider_raw,
-    providerAttempts,
-    grokToolCalls: grok.tool_calls,
-    createdAt,
-  });
   const diagnostics = {
     grok_endpoint: "responses",
     ...grok.diagnostics,
-    ...(degraded ? { degraded: true, grok_error: grokError } : {}),
     warnings,
-    provider_attempts: providerAttempts,
+    provider_attempts: grok.provider_attempts,
     options: {
       api_provider: config.apiProvider,
-      extra: extraOptions.limit,
-      extra_mode: extraOptions.mode,
-      extra_allocation: extra.allocation,
-      // Domain filters are pushed to Tavily/Firecrawl as well; results that still fall
-      // outside them are ranked last (see sources.js selectSources).
-      extra_domain_filter:
-        extraOptions.limit > 0 && (searchOptions.allowedDomains.length || searchOptions.excludedDomains.length) ? "pushed" : "none",
-      firecrawl_auth_mode: extraOptions.limit > 0 ? firecrawlAuthMode(config) : null,
       source_chars: sourceChars,
       max_sources: maxSources,
       max_chars: args.maxChars,
@@ -691,8 +519,8 @@ export async function runSearch(args, config, adapters = {}) {
   };
 
   // The run record is the durable copy of this call: full answer, every source (not just the
-  // 12 shown), provider raw payloads, tool calls, usage. stdout only carries its path. It is
-  // written last, so it also holds what the stdout cut changed.
+  // 12 shown), tool calls, usage. stdout only carries its path. It is written last, so it also
+  // holds what the stdout cut changed.
   const runPath = runRecordPath(config, { kind: "search", label: args.query });
   const sources = {
     items: itemsCompact,
@@ -701,7 +529,15 @@ export async function runSearch(args, config, adapters = {}) {
     omitted: selected.omitted,
     raw_path: runPath,
   };
-  if (args.fullSources) sources.raw = rawPayload;
+  if (args.fullSources) {
+    sources.raw = buildRawSourcesPayload({
+      query: args.query,
+      grok: grok.sources,
+      providerAttempts: grok.provider_attempts,
+      grokToolCalls: grok.tool_calls,
+      createdAt,
+    });
+  }
 
   const output = {
     query: args.query,
@@ -717,7 +553,7 @@ export async function runSearch(args, config, adapters = {}) {
   await emitText(config, output, "answer", {
     text: grok.answer,
     maxChars: args.maxChars,
-    file: { kind: "search", provider: degraded ? "search-fallback" : "grok-responses", label: args.query, extension: "md" },
+    file: { kind: "search", provider: "grok-responses", label: args.query, extension: "md" },
     tail: (shown, answer) =>
       answer.truncated ? [`The answer was cut at ${shown.length} of ${answer.original_chars} characters; the full answer is in ${answer.full_path}.`] : [],
     cutWarning: `answer.text keeps only the beginning so the whole output stays under ${STDOUT_BUDGET_BYTES / 1024}KB (agent shell tools cut longer output); the full text is in answer.full_path, read it in chunks.`,
@@ -738,15 +574,13 @@ export async function runSearch(args, config, adapters = {}) {
       // What stdout carried of the answer: its length and, when cut, where the full text went.
       printed_answer: { chars: output.answer.chars, truncated: output.answer.truncated, full_path: output.answer.full_path },
       sources: {
-        grok: rawGrokSources,
-        extra: rawExtraSources,
-        items: mergedCompactFull,
+        grok: grok.sources,
+        items: allCompact,
         returned: selected.returned,
         total: selected.total,
         omitted: selected.omitted,
       },
-      provider_raw: rawPayload.provider_raw,
-      provider_attempts: providerAttempts,
+      provider_attempts: grok.provider_attempts,
       grok_tool_calls: grok.tool_calls,
       diagnostics,
       error: null,

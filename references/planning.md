@@ -33,14 +33,14 @@ Skip planning when:
 
 "Is it available now", "did they change the default", "does this still fail": the answer has a date, and sources from different dates are not in conflict, they are in sequence.
 
-- Search the recent window first (`--x-from-date` 60–90 days back for X; add the current month or version to web keywords). Widen only when the recent window is empty.
+- Search the recent window first (`--x-from-date` 60–90 days back for X; add the current month or version to the web question). Widen only when the recent window is empty.
 - Use older material to explain how things got here, never to describe the present. An issue closed in March does not say what shipped in August.
 - When two sources disagree, write both with their dates and who said them (handle or organization), say which is newer, and leave the reconciliation visible to the user instead of picking one.
 - Tag each decisive quote with date, model or product version, client, and login method when those exist. A large share of apparent contradictions are two different setups.
 
 ## Source Hygiene
 
-- Treat `search.js` extra sources (Tavily/Firecrawl) as leads, not citations. Grok did not read them; a card with `opened: true` was read, a plain `searched` card was only listed. Verify with `fetch.js` if accuracy matters.
+- Treat `searched` cards as leads, not citations: Grok only saw them in a search listing. A card with `opened: true` was read. Verify with `fetch.js` if accuracy matters.
 - Treat Direct Fetch output as best-effort text extraction, not a full browser render. Tables, scripts, and JS-rendered regions may be missing.
 - Treat Direct Map output as candidate URLs only, not a complete sitemap.
 - On every result, scan `diagnostics.warnings`, `diagnostics.provider_attempts`, `diagnostics.provider`, and `content.full_path` / `answer.full_path` before deciding whether another command is needed.
