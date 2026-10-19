@@ -45,7 +45,7 @@ Default is web. `--source x` for what people are saying, a named account's posts
 ## Fetch Cost
 
 - X posts: `auto` tries Direct first (free, main post with date). `--provider firecrawl` only for the thread or replies; about 30 credits per post.
-- Fetch only evidence that would change the conclusion: one or two URLs per turn, a representative post or two for experience reports, never re-fetch text you have. Reddit and YouTube return shells from every provider.
+- Fetch only evidence that would change the conclusion: one or two URLs per turn, a representative post or two for experience reports, never re-fetch text you have. Reddit and YouTube return shells from every provider. WeChat articles (`mp.weixin.qq.com`) need `--provider deepseek` or `--provider firecrawl`; the others get a verification page.
 - The same URL again within 15 minutes comes from a local cache (no provider call); a different `--provider` or `--no-cache` fetches anew.
 - When citing decisive evidence, record date, model version, client, and login method.
 

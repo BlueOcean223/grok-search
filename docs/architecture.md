@@ -10,7 +10,7 @@
 
 ```text
 scripts/search.js           一张选项表 + runCommand（选项表与 runSearch 在 lib/search.js）
-scripts/fetch.js            一张选项表 + runCommand；Direct（请求 Markdown，非 HTML 直接返回）→ Firecrawl Scrape → Tavily Extract → Direct 文本
+scripts/fetch.js            一张选项表 + runCommand；Direct（请求 Markdown，非 HTML 直接返回）→ Firecrawl Scrape → Tavily Extract → Direct 文本 → DeepSeek Fetch（Direct 没拿到页面时）
 scripts/map.js              一张选项表 + runCommand；Tavily Map → Direct Map
 
 lib/cli.js                  三条命令共用的运行器：按选项表解析 argv、生成 usage、套用配置默认值、代理、deadline、错误封装与退出码
@@ -26,6 +26,7 @@ lib/provider-result.js      每次 provider 调用的计时与 attempt 记录（
 lib/http.js                 requestJson（POST JSON：重试与退避、Retry-After、脱敏）与 getText（GET 文本：超时、字节上限、charset 解码、附件判断）
 lib/tavily.js               Tavily Extract / Map
 lib/firecrawl.js            Firecrawl Scrape、metadata、额度判断与冷却记录
+lib/deepseek.js             DeepSeek Fetch 与它的 Markdown 反转义
 lib/direct-fetch.js         Direct Fetch：按 content-type 原样返回或 HTML 转文本、X 原帖校验与 Direct 优先判定
 lib/direct-map.js           Direct Map：页面链接与 sitemap（robots.txt、常规位置、索引展开）
 lib/html.js                 无解析器的 HTML 读取：实体、链接、可读文本
@@ -66,12 +67,14 @@ Grok 失败一律报错。402、额度类错误码，或正文带 quota/credit/b
 
 ```text
 URL
-  ├─ Tavily Extract（配置 key 时）
+  ├─ Direct（Accept: text/markdown；非 HTML 直接返回）
   ├─ Firecrawl Scrape（Keyless 或 API key）
-  └─ Direct Fetch
+  ├─ Tavily Extract（配置 key 时）
+  ├─ 第一步的 Direct 文本（有正文时）
+  └─ DeepSeek Fetch（配置 key、Direct 没拿到页面时；X 跳过）
 ```
 
-这是主备链，不会每次同时消耗 Tavily 与 Firecrawl credits。Firecrawl Keyless 能处理 JavaScript 页面和常见文档；Direct Fetch 只做普通 HTTP 文本/HTML 的 best-effort 清理。
+这是主备链，不会每次同时消耗几家的 credits。DeepSeek 只做最后一道：60 个真实 HTML 页面里它拿到正文 32 页、Direct 42 页，另有 11 页只给登录页或标题，排在前面会盖掉 Direct 的文本（`benchmarks/fetch-fallback-compare.mjs`，2026-10-19）。Firecrawl Keyless 能处理 JavaScript 页面和常见文档；Direct Fetch 只做普通 HTTP 文本/HTML 的 best-effort 清理。
 
 例外：`x.com/<handle>/status/<id>` 不论 key 都先走 Direct，页面含 `@handle`（按重定向后的真实 handle）、日期、非登录页正文三项校验通过才算成功（只有主帖）；不过再回主备链，主备链也不可用则按原样返回 Direct 内容并写 warning。Firecrawl 冷却期内 auto 直接跳过它。
 

@@ -1,10 +1,11 @@
 /**
  * Provider orchestration: which service fetches or maps a URL, in what order, and how a failure
  * of one hands over to the next. The adapters live in their own modules (`tavily.js`,
- * `firecrawl.js`, `direct-fetch.js`, `direct-map.js`); every call is timed and recorded through
- * `provider-result.js`.
+ * `firecrawl.js`, `deepseek.js`, `direct-fetch.js`, `direct-map.js`); every call is timed and
+ * recorded through `provider-result.js`.
  */
 import { activeFirecrawlCooldown, clearFirecrawlCooldown, cooldownSkipMessage } from "./cooldown.js";
+import { deepseekFetch } from "./deepseek.js";
 import { directFetch, directFirstForX, validateXPostContent } from "./direct-fetch.js";
 import { directMap } from "./direct-map.js";
 import { firecrawlAuthMode, firecrawlScrape } from "./firecrawl.js";
@@ -82,6 +83,7 @@ export async function fetchUrl(url, config, { provider = "auto" } = {}) {
     tried.push(attemptFrom(result));
     return done(result);
   }
+  if (provider === "deepseek") return done(await deepseekStep(url, config, tried));
 
   const xPost = directFirstForX(url, provider);
   if (xPost) {
@@ -128,6 +130,17 @@ export async function fetchUrl(url, config, { provider = "auto" } = {}) {
   if (provider === "auto") {
     // Direct already ran for this URL (an HTML page, or an X post that did not validate). With
     // nothing better available, its copy beats an error; reuse it instead of fetching again.
+    // When Direct got no page either (an error, or nothing beyond the title), DeepSeek Fetch is
+    // the last resort. It does not go earlier: on 60 HTML pages from the run records
+    // (2026-10-19) Direct had the page body for 42 and DeepSeek for 32, DeepSeek returned 11
+    // shells (login walls, a bare title) that would have hidden Direct's copy, and it took 6s at
+    // the median and up to 60s against Direct's 0.7s. It refuses X outright, so X skips it, and
+    // without a key it is left out rather than recorded as skipped on every failed fetch.
+    const directUsable = directFirst.ok && !directFirst.title_only;
+    if (!directUsable && !isXUrl(url) && config.deepseekApiKey) {
+      const result = await deepseekStep(url, config, tried);
+      if (result.ok) return done(result);
+    }
     if (directFirst.ok) {
       const notices = [...(directFirst.notices || [])];
       if (xPost) {
@@ -146,8 +159,8 @@ export async function fetchUrl(url, config, { provider = "auto" } = {}) {
 }
 
 /**
- * Whether the answer is a fallback: an extractor (Firecrawl, Tavily) failed before the provider
- * that answered, or auto returned Direct's first copy after both failed. The failure may be a
+ * Whether the answer is a fallback: an extractor (Firecrawl, Tavily, DeepSeek) failed before the
+ * provider that answered, or auto returned Direct's first copy after they failed. The failure may be a
  * rate limit or an outage that is over by the next call, so the fetch cache does not keep such
  * a result: in a reproduction on 2026-10-10 (Firecrawl answering 503, no Tavily key), Direct's
  * copy, navigation and all, was cached under auto, and the next fetch never asked the recovered
@@ -161,6 +174,12 @@ function fellBack(tried) {
 /** An HTML page, by its content type or, when a server mislabels it, by its first tag. */
 function servedHtml(result) {
   return /html/i.test(result.metadata?.content_type || "") || /^\s*<(?:!doctype\s+html|html[\s>])/i.test(result.content || "");
+}
+
+async function deepseekStep(url, config, tried) {
+  const result = await timed(deepseekFetch(url, config));
+  tried.push(attemptFrom(result));
+  return result;
 }
 
 async function tavilyStep(url, config, tried) {

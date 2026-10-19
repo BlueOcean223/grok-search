@@ -21,6 +21,8 @@
   "tavilyApiUrl": "https://api.tavily.com",
   "firecrawlApiKey": "",
   "firecrawlApiUrl": "https://api.firecrawl.dev/v2",
+  "deepseekApiKey": "",
+  "deepseekApiUrl": "https://api.deepseek.com",
   "proxy": "",
   "outputDir": "",
   "stateDir": "",

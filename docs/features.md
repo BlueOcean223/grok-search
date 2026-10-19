@@ -58,12 +58,14 @@ Grok 的来源去重后写入 `sources.items`（默认最多 12 条，`--max-sou
 `auto` provider 顺序：
 
 ```text
-Direct（请求 Markdown）→ Firecrawl Scrape → Tavily Extract → 第一步的 Direct 文本
+Direct（请求 Markdown）→ Firecrawl Scrape → Tavily Extract → 第一步的 Direct 文本 → DeepSeek Fetch（仅当 Direct 没拿到页面）
 ```
 
 Firecrawl 无 key 时走 Keyless；带 key 时自动发送 Bearer token。当前模式写入 `diagnostics.firecrawl_auth_mode`。
 
 第一步 Direct 带 `Accept: text/markdown` 请求，返回的不是 HTML 就原样采用，包括内容协商得到的 Markdown、纯文本文件（按声明的字符集解码；解码不成的交给后面的 provider）和 JSON（重新缩进）（记录里 153 个 HTML URL 有 45 个返回了 Markdown）。这一步超时 15 秒（同天对比的 60 个 HTML 页面里 Direct 最慢 6.3 秒）。HTML 页先给 Firecrawl，失败、限流或目标页状态码 ≥ 400 时再给 Tavily。Firecrawl 在前的依据是 60 页对比：人工核对后 Tavily 约 20 页缺正文（GitHub issue 页全部缺评论），Firecrawl 1 页。X 页面让 Tavily 在前，因为 Firecrawl 抓一条约 30 credits。
+
+Direct 请求失败或只拿到标题时，最后再试 DeepSeek Fetch（需 `DEEPSEEK_API_KEY`，X 跳过）。60 个真实 HTML 页面的对比里它拿到正文 32 页、Direct 42 页，另有 11 页只给登录页或标题，中位 6 秒，所以只做最后一道；`--provider deepseek` 可直接用，例如微信公众号文章。它的 Markdown 转义了全部 ASCII 标点，脚本会还原。
 
 Firecrawl 返回的目标页状态码 ≥ 400 时按失败处理，交给下一个 provider（记录在案的 7 次都是错误页）。`final_url` / `redirected` 来自 Firecrawl 的 `metadata.url` 或 Direct 的最终响应；带路径的 URL 落在站点首页时，`content.text` 开头和 warnings 里都会写明（gov.cn 用脚本把已删除的页面跳回首页，Firecrawl 跟过去后报 200）。
 
@@ -114,6 +116,7 @@ Tavily Map 返回空列表时 `auto` 也交给 Direct Map；显式 `--provider t
 | `GROK_X_VIDEO_UNDERSTANDING` | 分析 X 帖子视频，按 token 计费 |
 | `GROK_RESPONSES_OPENROUTER_ENGINE` | OpenRouter search engine，默认 `auto` |
 | `TAVILY_API_KEY` | Tavily Extract/Map |
+| `DEEPSEEK_API_KEY` | DeepSeek Fetch（auto 最后一道、`--provider deepseek`） |
 | `FIRECRAWL_API_KEY` | 可选；提高 Firecrawl 限流并使用账户额度 |
 | `GROK_OUTPUT_DIR` | 完整输出与运行记录目录 |
 | `GROK_STATE_DIR` | 冷却状态和 fetch 缓存目录，默认 `~/.cache/grok-search/` |

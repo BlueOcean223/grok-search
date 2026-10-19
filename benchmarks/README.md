@@ -55,6 +55,11 @@ decisions are kept in the local-only `.agent/` notes.
   deepseek-v4-pro with its server-side search (with and without Tavily results), and deepseek-flash
   with DeepSeek Search/Fetch as function tools. 13 fact questions with gold, 6 research questions
   from real sessions (unscored, written out for reading). One Grok run costs $0.03–0.10.
+- `fetch-fallback-compare.mjs`: where DeepSeek Fetch goes in fetch.js's auto chain. HTML pages
+  from the run records through DeepSeek Fetch, Tavily Extract and Direct, scored against each
+  other and the copy on record; chains replayed as fetch.js takes them (first text wins). Run on
+  2026-10-19 with Tavily out of credits, so only DeepSeek and Direct were compared. `--report`
+  rescores the saved copies.
 - `tool-call-cap-experiment.mjs`: one web and one X query posted straight to the Responses
   endpoint with `max_tool_calls`, `parallel_tool_calls` and `max_turns` variants
   (`--only web|x --ids a,b --repeat N`). Result: `max_tool_calls` is ignored by api.x.ai and by

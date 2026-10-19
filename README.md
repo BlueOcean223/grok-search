@@ -172,6 +172,8 @@ Node 原生 `fetch` 默认不会可靠读取终端代理变量。本项目会在
 | `TAVILY_API_URL` | `tavilyApiUrl` | 否 | Tavily 路径 | 默认 `https://api.tavily.com`。 |
 | `FIRECRAWL_API_KEY` | `firecrawlApiKey` | 否 | `fetch.js` | 可选。未配置时使用 Firecrawl Keyless；配置后使用独立账户额度和更高限流。 |
 | `FIRECRAWL_API_URL` | `firecrawlApiUrl` | 否 | Firecrawl 路径 | 默认 `https://api.firecrawl.dev/v2`。 |
+| `DEEPSEEK_API_KEY` | `deepseekApiKey` | 否 | `fetch.js` | 启用 DeepSeek Fetch：auto 下 Direct 没拿到页面时最后再试，或 `--provider deepseek`。 |
+| `DEEPSEEK_API_URL` | `deepseekApiUrl` | 否 | DeepSeek 路径 | 默认 `https://api.deepseek.com`。 |
 | `GROK_OUTPUT_DIR` | `outputDir` | 否 | 所有脚本 | 覆盖长输出与运行记录的落盘目录。默认 `~/.cache/grok-search/outputs/`。 |
 | `GROK_STATE_DIR` | `stateDir` | 否 | 所有脚本 | 跨命令状态目录（Firecrawl 额度冷却文件 `firecrawl-cooldown.json`、15 分钟的 fetch 缓存 `fetch-cache/`）。默认 `~/.cache/grok-search/`。 |
 | `GROK_RUN_LOG` | `runLog` | 否 | 所有脚本 | 默认 `true`，每次调用写一份运行记录 JSON；`off` / `false` 关闭后 `sources.raw_path` / `diagnostics.run_path` 为 null。 |
@@ -299,12 +301,14 @@ fetch 默认只返回 12,000 字符 preview（`--max-chars` 调整）。正文�
 `--provider auto` 的 provider 顺序：
 
 ```text
-Direct（请求 Markdown）-> Firecrawl Scrape -> Tavily Extract -> 第一步拿到的 Direct 文本
+Direct（请求 Markdown）-> Firecrawl Scrape -> Tavily Extract -> 第一步拿到的 Direct 文本 -> DeepSeek Fetch（仅当 Direct 没拿到页面）
 ```
 
 第一步 Direct 用 `Accept: text/markdown, text/html;q=0.9, */*;q=0.8` 请求页面，返回的不是 HTML 就原样采用（按响应声明的字符集解码，JSON 重新缩进；没声明字符集、又解码不成 UTF-8 的文本交给后面的 provider）。支持内容协商的站点会直接给出不带导航的 Markdown，例如 code.claude.com、platform.openai.com，以及接入 Cloudflare Markdown for Agents 的站点。纯文本文件、JSON 接口也在这一步拿到。2026-10-10 用记录里的 153 个 HTML URL 试过，45 个返回了 Markdown。这一步只是探测，超时 15 秒（同一天对比的 60 个 HTML 页面里，Direct 最慢 6.3 秒），卡住的站点不会拖住后面的 provider。
 
 返回 HTML 的页面交给 Firecrawl。它出错、目标页状态码 ≥ 400、内容为空或被限流（429）时，再交给 Tavily。两家都失败时，用第一步已经拿到的 Direct 文本，不再重复请求。
+
+Direct 也没拿到页面时（请求失败，或只拿到标题），最后再问 DeepSeek Fetch（配置 `DEEPSEEK_API_KEY` 时；X 页面跳过，它不抓 X）。它只排在最后，依据是 2026-10-19 用运行记录里 60 个 HTML 页面做的对比（`benchmarks/fetch-fallback-compare.mjs`，当时 Firecrawl、Tavily 额度都已用完）：Direct 拿到正文 42 页，DeepSeek 32 页；DeepSeek 另有 11 页只给了登录页或一个标题，排在 Direct 前面就会盖掉 Direct 的文本；耗时中位数 DeepSeek 6 秒、最慢 60 秒，Direct 0.7 秒。它的好处是正文更干净，Direct 被拦（403）或页面靠 JavaScript 渲染时还能补上；也可以 `--provider deepseek` 直接用，例如微信公众号文章（Direct 和 Tavily 只拿到验证页）。DeepSeek 返回的 Markdown 把所有 ASCII 标点都加了反斜杠，脚本会还原；代码块没有围栏。按成功次数计费，每千次 0.75 美元，失败不收费。
 
 Firecrawl 排在 Tavily 前面，依据是 2026-10-10 的对比：从运行记录里选了 60 个 HTML 页面，同一时间用两家各抓一遍，再人工核对。
 - Tavily 约 20 页缺正文：11 个 GitHub issue 页全部缺评论，arXiv 页缺摘要等。

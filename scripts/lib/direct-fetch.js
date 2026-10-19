@@ -77,6 +77,7 @@ export async function directFetch(url, options = {}) {
     metadata: directMetadata(got),
     warnings,
     notices,
+    ...(titleOnly ? { title_only: true } : {}),
   };
 }
 

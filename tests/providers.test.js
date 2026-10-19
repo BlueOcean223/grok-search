@@ -10,6 +10,7 @@ import {
   readFirecrawlCooldown,
   recordFirecrawlCooldown,
 } from "../scripts/lib/cooldown.js";
+import { deepseekFetch, unescapeDeepSeekMarkdown } from "../scripts/lib/deepseek.js";
 import { collapseRepeatedLines, directFirstForX, validateXPostContent } from "../scripts/lib/direct-fetch.js";
 import { firecrawlMetadata, firecrawlScrape } from "../scripts/lib/firecrawl.js";
 import { fetchUrl } from "../scripts/lib/providers.js";
@@ -689,5 +690,129 @@ await withServer(
     assert.equal(pageGets, 1);
   }
 );
+
+// DeepSeek Fetch escapes every ASCII punctuation character, code included; one backslash comes
+// off each, so a literal backslash (sent as \\) survives. Chinese punctuation is left alone.
+assert.equal(
+  unescapeDeepSeekMarkdown(String.raw`\#\# Rust 1\.99 include\_domains curl https\:\/\/a\.b \\ C\:\\path 中文，`),
+  String.raw`## Rust 1.99 include_domains curl https://a.b \ C:\path 中文，`
+);
+
+// deepseekFetch: bearer key, the URL in the body, the escapes undone; a 504 (its crawler timed
+// out) is retried once, a 404 (refused or unreadable) is not; without a key it is skipped.
+{
+  const seen = [];
+  await withServer(
+    (req, res) => {
+      readBody(req, (body) => {
+        seen.push([req.url, req.headers.authorization, body.url]);
+        if (body.url.endsWith("/refused")) {
+          res.writeHead(404, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: { message: "failed to fetch URL", type: "invalid_request_error", param: null, code: "invalid_request_error" } }));
+          return;
+        }
+        if (body.url.endsWith("/slow") && seen.filter((s) => s[2].endsWith("/slow")).length === 1) {
+          res.writeHead(504, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: { message: "Request timeout" } }));
+          return;
+        }
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ title: "Rust 1\\.99", content: "\\# Rust 1\\.99\n\nAnnouncing\\!" }));
+      });
+    },
+    async (base) => {
+      const config = { ...baseConfig, deepseekApiKey: "ds-key", deepseekApiUrl: base };
+      const page = await deepseekFetch("https://example.com/post", config);
+      assert.deepEqual(page, { ok: true, provider: "deepseek", content: "# Rust 1.99\n\nAnnouncing!", metadata: { title: "Rust 1.99" }, requests: 1 });
+      assert.deepEqual(seen[0], ["/v1/tools/fetch", "Bearer ds-key", "https://example.com/post"]);
+
+      const refused = await deepseekFetch("https://example.com/refused", config);
+      assert.equal(refused.ok, false);
+      assert.match(refused.error, /^HTTP 404/);
+      assert.equal(refused.requests, 1);
+
+      const slow = await deepseekFetch("https://example.com/slow", config);
+      assert.equal(slow.ok, true);
+      assert.equal(slow.requests, 2);
+
+      const noKey = await deepseekFetch("https://example.com/post", { ...baseConfig, deepseekApiUrl: base });
+      assert.deepEqual(noKey, { ok: false, provider: "deepseek", skipped: true, error: "DEEPSEEK_API_KEY 未配置" });
+    }
+  );
+}
+
+// Under auto DeepSeek is the last resort: only when Direct got no page (an error, or nothing
+// beyond the title) after Firecrawl and Tavily failed. When it fails too, Direct's title-only copy
+// is still returned. A named --provider deepseek goes straight to it.
+{
+  const calls = [];
+  await withServer(
+    (req, res) => {
+      if (req.url === "/v1/tools/fetch") {
+        readBody(req, (body) => {
+          calls.push(body.url.replace(/^http:\/\/127\.0\.0\.1:\d+/, ""));
+          if (body.url.endsWith("/js-dead")) {
+            res.writeHead(404, { "content-type": "application/json" });
+            res.end(JSON.stringify({ error: { message: "failed to fetch URL" } }));
+            return;
+          }
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify({ title: "Doc", content: "DeepSeek\\'s copy" }));
+        });
+        return;
+      }
+      req.resume();
+      if (req.url === "/tavily/extract" || req.url === "/scrape") {
+        res.writeHead(500, { "content-type": "text/plain" });
+        res.end("down");
+        return;
+      }
+      if (req.url === "/blocked") {
+        res.writeHead(403, { "content-type": "text/html" });
+        res.end("<title>Forbidden</title>");
+        return;
+      }
+      res.writeHead(200, { "content-type": "text/html" });
+      res.end(req.url.startsWith("/js") ? "<title>App</title><script>render()</script>" : "<title>Page</title><p>Direct's text</p>");
+    },
+    async (base) => {
+      const config = {
+        ...baseConfig,
+        tavilyApiKey: "tavily-key",
+        tavilyApiUrl: `${base}/tavily`,
+        firecrawlApiUrl: base,
+        deepseekApiKey: "ds-key",
+        deepseekApiUrl: base,
+        retryMaxAttempts: 1,
+      };
+      const steps = (result) => result.tried.map((attempt) => [attempt.provider, attempt.ok]);
+
+      const blocked = await fetchUrl(`${base}/blocked`, config, { provider: "auto" });
+      assert.equal(blocked.provider, "deepseek");
+      assert.equal(blocked.content, "DeepSeek's copy");
+      assert.deepEqual(steps(blocked), [["direct", false], ["firecrawl", false], ["tavily", false], ["deepseek", true]]);
+      // Served after extractors failed: a fallback, which the fetch cache does not keep.
+      assert.equal(blocked.fallback, true);
+
+      const app = await fetchUrl(`${base}/js-app`, config, { provider: "auto" });
+      assert.equal(app.provider, "deepseek");
+
+      const dead = await fetchUrl(`${base}/js-dead`, config, { provider: "auto" });
+      assert.equal(dead.provider, "direct");
+      assert.match(dead.notices[0], /no text beyond the page title/);
+      assert.deepEqual(steps(dead).slice(-2), [["deepseek", false], ["direct", true]]);
+
+      // Direct had the page: DeepSeek is not asked.
+      const page = await fetchUrl(`${base}/page`, config, { provider: "auto" });
+      assert.equal(page.provider, "direct");
+      assert.equal(steps(page).some(([name]) => name === "deepseek"), false);
+
+      const named = await fetchUrl(`${base}/page`, config, { provider: "deepseek" });
+      assert.equal(named.provider, "deepseek");
+      assert.deepEqual(steps(named), [["deepseek", true]]);
+      assert.deepEqual(calls, ["/blocked", "/js-app", "/js-dead", "/page"]);
+    }
+  );
+}
 
 console.log("providers fixtures ok");

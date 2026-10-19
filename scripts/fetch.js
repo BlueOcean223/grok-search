@@ -11,9 +11,9 @@ const OPTIONS = {
     flag: "--provider",
     type: "string",
     default: "auto",
-    values: ["auto", "tavily", "firecrawl", "direct"],
-    value: "auto|tavily|firecrawl|direct",
-    help: "auto (default): Direct when the server sends Markdown or another non-HTML\ntype, else Firecrawl Scrape, then Tavily Extract, then Direct's HTML",
+    values: ["auto", "tavily", "firecrawl", "deepseek", "direct"],
+    value: "auto|tavily|firecrawl|deepseek|direct",
+    help: "auto (default): Direct when the server sends Markdown or another non-HTML\ntype, else Firecrawl Scrape, then Tavily Extract, then Direct's HTML; DeepSeek\nFetch only when Direct got no page text",
   },
   maxChars: {
     flag: "--max-chars",
@@ -206,10 +206,12 @@ await runCommand({
   options: OPTIONS,
   positional: POSITIONAL,
   intro: "Fetch a web page as readable text/Markdown.",
-  environment: `  TAVILY_API_KEY       Tavily key used by the primary provider
-  TAVILY_API_URL       Default: https://api.tavily.com
-  FIRECRAWL_API_KEY    Optional Firecrawl key; keyless fallback works without it
+  environment: `  FIRECRAWL_API_KEY    Optional Firecrawl key; keyless works without it
   FIRECRAWL_API_URL    Default: https://api.firecrawl.dev/v2
+  TAVILY_API_KEY       Tavily key for the second extractor
+  TAVILY_API_URL       Default: https://api.tavily.com
+  DEEPSEEK_API_KEY     DeepSeek key for the last resort when Direct gets no page text
+  DEEPSEEK_API_URL     Default: https://api.deepseek.com
   GROK_DEADLINE_SECONDS
                        Optional whole-command deadline; default 240, 0 disables
   GROK_OUTPUT_DIR      Optional directory for full content when preview is truncated

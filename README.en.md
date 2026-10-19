@@ -179,6 +179,8 @@ Supported variables:
 | `TAVILY_API_URL` | `tavilyApiUrl` | No | Tavily paths | Defaults to `https://api.tavily.com`. |
 | `FIRECRAWL_API_KEY` | `firecrawlApiKey` | No | `fetch.js` | Optional. Uses Firecrawl Keyless when absent; a key provides account-scoped credits and higher rate limits. |
 | `FIRECRAWL_API_URL` | `firecrawlApiUrl` | No | Firecrawl paths | Defaults to `https://api.firecrawl.dev/v2`. |
+| `DEEPSEEK_API_KEY` | `deepseekApiKey` | No | `fetch.js` | Enables DeepSeek Fetch: the last resort under auto when Direct got no page, or `--provider deepseek`. |
+| `DEEPSEEK_API_URL` | `deepseekApiUrl` | No | DeepSeek paths | Defaults to `https://api.deepseek.com`. |
 | `GROK_OUTPUT_DIR` | `outputDir` | No | all scripts | Overrides long-output and run-record storage. Default: `~/.cache/grok-search/outputs/`. |
 | `GROK_STATE_DIR` | `stateDir` | No | all scripts | Cross-command state directory (Firecrawl quota cooldown file `firecrawl-cooldown.json`, the 15-minute fetch cache `fetch-cache/`). Default: `~/.cache/grok-search/`. |
 | `GROK_RUN_LOG` | `runLog` | No | all scripts | Default `true`: every command writes one run-record JSON. `off` / `false` disables it, and `sources.raw_path` / `diagnostics.run_path` become null. |
@@ -306,12 +308,14 @@ Notices that change how the text should be read also open `content.text`: the pa
 Provider order for `--provider auto`:
 
 ```text
-Direct (asks for Markdown) -> Firecrawl Scrape -> Tavily Extract -> the Direct text from the first step
+Direct (asks for Markdown) -> Firecrawl Scrape -> Tavily Extract -> the Direct text from the first step -> DeepSeek Fetch (only when Direct got no page)
 ```
 
 The first step requests the page with `Accept: text/markdown, text/html;q=0.9, */*;q=0.8`, and anything that is not HTML is taken as served (decoded by the charset the response declares, JSON re-indented; text with no declared charset that does not decode as UTF-8 goes on to the next provider). Sites that negotiate content send the page as Markdown without navigation, for example code.claude.com, platform.openai.com and sites on Cloudflare's Markdown for Agents. Plain-text files and JSON APIs are also fetched in this step. Tried on 153 HTML URLs from the run records on 2026-10-10, 45 answered with Markdown. This step only probes, with a 15-second timeout (the slowest of the 60 HTML pages compared that day took Direct 6.3 s), so a stalled site does not hold up the providers after it.
 
 An HTML page goes to Firecrawl. If Firecrawl errors, reports a target status of 400 or more, returns nothing or is rate-limited (429), the page goes to Tavily. If both fail, the Direct text from the first step is returned without fetching again.
+
+When Direct got no page either (an error, or nothing beyond the title), DeepSeek Fetch is asked last (with `DEEPSEEK_API_KEY` set; X pages skip it, since it refuses X). It stays last because of a comparison on 60 HTML pages from the run records on 2026-10-19 (`benchmarks/fetch-fallback-compare.mjs`, with Firecrawl and Tavily both out of credits): Direct had the page body for 42 and DeepSeek for 32; DeepSeek returned only a login page or a title for 11 more, which would hide Direct's text if it came first; DeepSeek took 6 s at the median and up to 60 s, Direct 0.7 s. Its text is cleaner, and it can still read pages that block Direct (403) or render with JavaScript; `--provider deepseek` uses it directly, for example for WeChat articles, where Direct and Tavily get a verification page. DeepSeek backslash-escapes every ASCII punctuation character in its Markdown, which the script undoes; code blocks come without fences. It bills $0.75 per 1000 successful fetches; failures are free.
 
 Firecrawl comes before Tavily because of a comparison on 2026-10-10: 60 HTML pages from the run records, fetched by both at the same time and checked by hand.
 - Tavily lost body text on about 20 of them: the comments of all 11 GitHub issue pages, arXiv abstracts and others.
