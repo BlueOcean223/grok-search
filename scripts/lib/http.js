@@ -54,7 +54,7 @@ export function upstreamMessage(body) {
 
 export function redactSecrets(text, config) {
   let out = String(text || "");
-  for (const secret of [config?.grokApiKey, config?.tavilyApiKey, config?.firecrawlApiKey]) {
+  for (const secret of [config?.grokApiKey, config?.tavilyApiKey, config?.firecrawlApiKey, config?.deepseekApiKey]) {
     if (typeof secret !== "string" || secret.length < 4) continue;
     out = out.split(secret).join("***");
   }

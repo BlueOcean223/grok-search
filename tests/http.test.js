@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { getText } from "../scripts/lib/http.js";
+import { getText, requestJson } from "../scripts/lib/http.js";
 
 async function withServer(handler, callback) {
   const server = createServer(handler);
@@ -97,5 +97,37 @@ await withServer(
 const refused = await getText("http://127.0.0.1:1/", options);
 assert.equal(refused.reason, "network");
 assert.equal(refused.ok, false);
+
+// Credentials reflected by an upstream must not reach HTTP or JSON-parse errors.
+{
+  const deepseekApiKey = "deepseek-redaction-fixture";
+  const diagnostic = "trace=deepseek-redaction-test";
+  const reflected = `Rejected ${deepseekApiKey}, repeated ${deepseekApiKey}; ${diagnostic}`;
+  await withServer(
+    (req, res) => {
+      req.resume();
+      const malformed = req.url === "/invalid-json";
+      res.writeHead(malformed ? 200 : 401, { "content-type": "application/json" });
+      res.end(malformed ? reflected : JSON.stringify({ error: { message: reflected } }));
+    },
+    async (base) => {
+      for (const route of ["/error", "/invalid-json"]) {
+        await assert.rejects(
+          requestJson(`${base}${route}`, {
+            headers: {},
+            body: {},
+            timeoutMs: 5000,
+            config: { deepseekApiKey, retryMaxWait: 0 },
+          }),
+          (error) => {
+            assert.equal(error.message.includes(deepseekApiKey), false, `${route} exposed the credential`);
+            assert.equal(error.message.includes(diagnostic), true, `${route} lost useful diagnostics`);
+            return true;
+          }
+        );
+      }
+    }
+  );
+}
 
 console.log("http fixtures ok");
