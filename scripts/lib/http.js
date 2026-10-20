@@ -52,10 +52,14 @@ export function upstreamMessage(body) {
   return typeof message === "string" && message.trim() ? message.trim() : null;
 }
 
+/**
+ * Replace every configured credential in `text` with `***`. A credential is any config field
+ * whose name ends in `ApiKey`, so a provider added later is covered without editing this.
+ */
 export function redactSecrets(text, config) {
   let out = String(text || "");
-  for (const secret of [config?.grokApiKey, config?.tavilyApiKey, config?.firecrawlApiKey, config?.deepseekApiKey]) {
-    if (typeof secret !== "string" || secret.length < 4) continue;
+  for (const [key, secret] of Object.entries(config || {})) {
+    if (!key.endsWith("ApiKey") || typeof secret !== "string" || secret.length < 4) continue;
     out = out.split(secret).join("***");
   }
   return out;
@@ -110,8 +114,11 @@ export async function requestJson(url, { headers, body, timeoutMs, config, retry
       clearTimeout(timer);
 
       if (!response.ok) {
-        const errorBody = parseErrorBody(text);
-        const error = new Error(`HTTP ${response.status}: ${redactSecrets(trimBody(text), config)}`);
+        // Redact before parsing, so upstreamMessage and upstreamCode are clean too, and before
+        // trimming, so a key cut at the 500-character mark cannot leave its first half behind.
+        const safeText = redactSecrets(text, config);
+        const errorBody = parseErrorBody(safeText);
+        const error = new Error(`HTTP ${response.status}: ${trimBody(safeText)}`);
         error.status = response.status;
         error.retryAfterMs = retryAfterMs(response.headers) ?? bodyRetryAfterMs(errorBody);
         error.upstreamCode = upstreamCode(errorBody);
@@ -122,7 +129,7 @@ export async function requestJson(url, { headers, body, timeoutMs, config, retry
       try {
         return text ? JSON.parse(text) : {};
       } catch (cause) {
-        const error = new Error(`响应不是有效 JSON: ${redactSecrets(trimBody(text), config)}`);
+        const error = new Error(`响应不是有效 JSON: ${trimBody(redactSecrets(text, config))}`);
         error.cause = cause;
         // A stable but malformed response will not improve on retry.
         error.retryable = false;

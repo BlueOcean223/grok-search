@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { getText, requestJson } from "../scripts/lib/http.js";
+import { getText, redactSecrets, requestJson } from "../scripts/lib/http.js";
 
 async function withServer(handler, callback) {
   const server = createServer(handler);
@@ -106,28 +106,48 @@ assert.equal(refused.ok, false);
   await withServer(
     (req, res) => {
       req.resume();
+      if (req.url === "/long") {
+        // The key straddles trimBody's 500-character cut.
+        res.writeHead(401, { "content-type": "text/plain" });
+        res.end(`${"x".repeat(490)}${deepseekApiKey}`);
+        return;
+      }
       const malformed = req.url === "/invalid-json";
       res.writeHead(malformed ? 200 : 401, { "content-type": "application/json" });
       res.end(malformed ? reflected : JSON.stringify({ error: { message: reflected } }));
     },
     async (base) => {
+      const request = (route) =>
+        requestJson(`${base}${route}`, {
+          headers: {},
+          body: {},
+          timeoutMs: 5000,
+          config: { deepseekApiKey, retryMaxWait: 0 },
+        });
       for (const route of ["/error", "/invalid-json"]) {
-        await assert.rejects(
-          requestJson(`${base}${route}`, {
-            headers: {},
-            body: {},
-            timeoutMs: 5000,
-            config: { deepseekApiKey, retryMaxWait: 0 },
-          }),
-          (error) => {
-            assert.equal(error.message.includes(deepseekApiKey), false, `${route} exposed the credential`);
-            assert.equal(error.message.includes(diagnostic), true, `${route} lost useful diagnostics`);
-            return true;
-          }
-        );
+        await assert.rejects(request(route), (error) => {
+          assert.equal(error.message.includes(deepseekApiKey), false, `${route} exposed the credential`);
+          assert.equal(error.message.includes(diagnostic), true, `${route} lost useful diagnostics`);
+          if (route === "/error") assert.equal(error.upstreamMessage, `Rejected ***, repeated ***; ${diagnostic}`);
+          return true;
+        });
       }
+      await assert.rejects(request("/long"), (error) => {
+        assert.equal(error.message, `HTTP 401: ${"x".repeat(490)}***`);
+        return true;
+      });
     }
   );
 }
+
+// Any config field ending in ApiKey is a credential; other fields are left alone.
+assert.equal(
+  redactSecrets("url https://new.example key new-provider-secret", {
+    newProviderApiKey: "new-provider-secret",
+    newProviderApiUrl: "https://new.example",
+  }),
+  "url https://new.example key ***"
+);
+assert.equal(redactSecrets("text", null), "text");
 
 console.log("http fixtures ok");
