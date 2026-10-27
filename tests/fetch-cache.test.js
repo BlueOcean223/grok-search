@@ -110,7 +110,8 @@ await writeFetchCache(config, "https://example.com/fresh", "auto", { ok: true, p
 const left = await readdir(cacheDir);
 assert.equal(left.length, 1);
 assert.notEqual(left[0], file);
-assert.equal((await stat(path.join(cacheDir, left[0]))).mode & 0o777, 0o600);
+// Windows has no Unix mode bits (every file reads back 0o666); the profile dir's ACL keeps it private.
+if (process.platform !== "win32") assert.equal((await stat(path.join(cacheDir, left[0]))).mode & 0o777, 0o600);
 
 // No state dir, no cache.
 assert.equal(await readFetchCache({}, url, "auto"), null);

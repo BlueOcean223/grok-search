@@ -12,6 +12,7 @@
 
 - Node.js `>=18.17`
 - 需要先运行一次 `npm install` 安装 `undici` 传输依赖
+- 用 `node` 运行脚本，这样 macOS、Linux 和 Windows（PowerShell、cmd）上的命令都一样
 - `search.js` 需要配置 `GROK_API_URL` 和 `GROK_API_KEY`
 
 ## 快速开始
@@ -20,21 +21,21 @@
 
 ```bash
 npm install
-./scripts/search.js "latest Node.js LTS"
-./scripts/fetch.js https://example.com
-./scripts/map.js https://docs.example.com --limit 20
+node scripts/search.js "latest Node.js LTS"
+node scripts/fetch.js https://example.com
+node scripts/map.js https://docs.example.com --limit 20
 ```
 
 ## 在 pi 中使用（示例）
 
 把本目录 clone 或复制到你的 pi skills 位置，然后通过 `SKILL.md` 启用这个 skill。
 
-示例命令仍然是直接运行脚本：
+示例命令和上面相同：
 
 ```bash
-./scripts/search.js "latest Node.js LTS"
-./scripts/fetch.js https://example.com
-./scripts/map.js https://docs.example.com --limit 20
+node scripts/search.js "latest Node.js LTS"
+node scripts/fetch.js https://example.com
+node scripts/map.js https://docs.example.com --limit 20
 ```
 
 其他 agent harness 也可以采用同样方式：读取 `SKILL.md`，再按需运行 `scripts/search.js`、`scripts/fetch.js`、`scripts/map.js`。
@@ -63,6 +64,13 @@ npm install
 mkdir -p ~/.config/grok-search
 cp config.example.json ~/.config/grok-search/config.json
 chmod 600 ~/.config/grok-search/config.json
+```
+
+Windows 上这个文件在 `%USERPROFILE%\.config\grok-search\config.json`。PowerShell 中可以这样复制：
+
+```powershell
+New-Item -ItemType Directory -Force "$HOME\.config\grok-search" | Out-Null
+Copy-Item config.example.json "$HOME\.config\grok-search\config.json"
 ```
 
 完整配置示例：
@@ -207,16 +215,16 @@ OpenRouter 使用 `openrouter:web_search` server tool，不会给模型名追加
 ## Search
 
 ```bash
-./scripts/search.js "What changed in the latest Node.js LTS?"
-./scripts/search.js --instructions "只要官方 changelog 的原文和日期，找不到就说" "Node.js 最新 LTS 的 changelog 改了什么？"
-./scripts/search.js --platform GitHub "有哪些给 pi coding agent 用的搜索 skill？"
-./scripts/search.js --responses-allowed-domains github.com "有哪些给 pi coding agent 用的搜索 skill？"
-./scripts/search.js --source-chars 200 "query"
-./scripts/search.js --max-sources 8 "query"
-./scripts/search.js --deadline 120 "query"
-./scripts/search.js --full-sources "debug provider raw"
-./scripts/search.js --responses-openrouter-engine exa "strict web-only query"
-./scripts/search.js --source x --responses-parallel-tool-calls false "query"   # 每 turn 一次工具调用，省费用
+node scripts/search.js "What changed in the latest Node.js LTS?"
+node scripts/search.js --instructions "只要官方 changelog 的原文和日期，找不到就说" "Node.js 最新 LTS 的 changelog 改了什么？"
+node scripts/search.js --platform GitHub "有哪些给 pi coding agent 用的搜索 skill？"
+node scripts/search.js --responses-allowed-domains github.com "有哪些给 pi coding agent 用的搜索 skill？"
+node scripts/search.js --source-chars 200 "query"
+node scripts/search.js --max-sources 8 "query"
+node scripts/search.js --deadline 120 "query"
+node scripts/search.js --full-sources "debug provider raw"
+node scripts/search.js --responses-openrouter-engine exa "strict web-only query"
+node scripts/search.js --source x --responses-parallel-tool-calls false "query"   # 每 turn 一次工具调用，省费用
 ```
 
 query 只发给 Grok，直接写成要问的问题，把要的字段一起写进去。2026-10-19 同一批题对照（`benchmarks/supplement-compare.mjs`）：整句问题和"短关键词 + `--instructions`"在 13 道时效题上都全对，6 道调研题互有胜负，整句略省一点费用。
@@ -230,11 +238,11 @@ query 只发给 Grok，直接写成要问的问题，把要的字段一起写进
 `--source` 选择挂载哪些 Grok 服务端工具，默认 `web`：
 
 ```bash
-./scripts/search.js --source x "X 上怎么评价 grok-4.6"          # 只查 X
-./scripts/search.js --source both "grok-4.6 发布后的反响"        # Grok 自行路由
-./scripts/search.js --source x --responses-allowed-x-handles xai,OpenAI "query"
-./scripts/search.js --source x --x-from-date 2026-08-01 --x-to-date 2026-08-16 "query"
-./scripts/search.js --source x --x-images "query"               # 分析帖子中的图片
+node scripts/search.js --source x "X 上怎么评价 grok-4.6"          # 只查 X
+node scripts/search.js --source both "grok-4.6 发布后的反响"        # Grok 自行路由
+node scripts/search.js --source x --responses-allowed-x-handles xai,OpenAI "query"
+node scripts/search.js --source x --x-from-date 2026-08-01 --x-to-date 2026-08-16 "query"
+node scripts/search.js --source x --x-images "query"               # 分析帖子中的图片
 ```
 
 - `x_search` 支持 handle allow/deny（互斥，各上限 20）、`--x-from-date` / `--x-to-date`（`YYYY-MM-DD`）、`--x-images` / `--x-videos`（默认关闭，按 token 额外计费；`--no-x-images` / `--no-x-videos` 可关掉配置里打开的开关）。带日期窗口或 handle 过滤的检索一条帖子都没读到时（`usage.server_side_tool_usage_details.x_posts_fetched` 为 0），`diagnostics.warnings` 会指出是哪个过滤条件，建议放宽重试；账号在该时间段没发帖时结果就是空的，不是检索失败。
@@ -284,14 +292,14 @@ Source card 不再输出长 `description` 或 `content` 字段，只输出短 `s
 ## Fetch
 
 ```bash
-./scripts/fetch.js https://example.com
-./scripts/fetch.js --provider direct https://example.com
+node scripts/fetch.js https://example.com
+node scripts/fetch.js --provider direct https://example.com
 ```
 
 fetch 默认只返回 12,000 字符 preview（`--max-chars` 调整）。正文被截断时，`content.text` 最后一行是 `[grok-search]` 开头的提示，写明显示的是第几到第几个字符、下一段用哪个 `--offset`、全文在哪个文件。要往下读，用 `--offset` 接着读，不要加大 `--max-chars` 把开头重新打印一遍。不管 `--max-chars` 设多大，整个 JSON 输出都不超过 45KB（pi 的 bash 工具只保留输出最后 50KB，超长的单行正文会整行丢掉）：放不下时 `content.text` 再截短，`content.truncated` 为 true，全文在 `content.full_path`。search 的 `answer.text` 同理，被截断时最后一行写明全文路径。
 
 ```bash
-./scripts/fetch.js --offset 12000 https://example.com
+node scripts/fetch.js --offset 12000 https://example.com
 ```
 
 同一个 URL 在 15 分钟内再抓，直接读本地缓存（`<stateDir>/fetch-cache/`），不再请求 provider，参照 Claude Code WebFetch 的 15 分钟缓存。`auto` 只复用之前 `auto` 抓到的结果；显式指定 provider 时，复用该 provider 产出的结果，所以换 provider 重抓仍会真的去请求新的 provider。命中时 `diagnostics.cache` 为 `{ hit, fetched_at, age_seconds }`，`provider_attempts` 为空。失败的结果不缓存，回退得到的结果也不缓存（Firecrawl 或 Tavily 失败之后才拿到的结果，以及两家都失败后用的 Direct 文本），因为失败可能下一次就恢复了；`--no-cache` 强制重抓。截断提示里写的是缓存还剩几分钟，续读时复用第一次写出的全文文件。`--offset` 用在一次新抓取上时（缓存已过期，或用了 `--no-cache`），正文开头会提示这个偏移量可能和之前那份文本对不上。依据：截至 2026-10-09 的会话里，各会话抓过的 109 个 URL 中有 12 个在约三分钟内又被抓了一次，原因是 agent 用不同的脚本过滤同一页，或者想看 preview 之后的内容。
@@ -331,9 +339,9 @@ fetch 成功输出使用 `content.text`、`content.offset`、`content.chars`（�
 ## Map
 
 ```bash
-./scripts/map.js https://docs.example.com --limit 20
-./scripts/map.js --provider direct https://docs.example.com
-./scripts/map.js https://docs.example.com --instructions "only API reference pages" --max-depth 2
+node scripts/map.js https://docs.example.com --limit 20
+node scripts/map.js --provider direct https://docs.example.com
+node scripts/map.js https://docs.example.com --instructions "only API reference pages" --max-depth 2
 ```
 
 `--provider auto` 的 provider 顺序：
@@ -374,8 +382,8 @@ map 成功输出使用 `urls` 表示发现的 URL。provider、response time、i
 不需要 key：
 
 ```bash
-./scripts/fetch.js --provider direct https://example.com
-./scripts/map.js --provider direct https://example.com --limit 5
+node scripts/fetch.js --provider direct https://example.com
+node scripts/map.js --provider direct https://example.com --limit 5
 npm test
 node tests/argv.test.js
 ```
@@ -385,7 +393,7 @@ node tests/argv.test.js
 ```bash
 export GROK_API_URL="https://your-openai-compatible-endpoint/v1"
 export GROK_API_KEY="your-key"
-./scripts/search.js "What changed in the latest Node.js LTS?"
+node scripts/search.js "What changed in the latest Node.js LTS?"
 ```
 
 ## 常见错误

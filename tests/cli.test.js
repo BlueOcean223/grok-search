@@ -134,8 +134,8 @@ throwsWith(() => parse(["--count", "2", "--verbose", "q"], { finish: (args) => {
   assert.equal(
     text,
     [
-      "Usage: ./scripts/fetch.js [--provider auto|direct] [--quiet] [--images|--no-images]",
-      "                          [--a-rather-long-flag-name N] <url>",
+      "Usage: node scripts/fetch.js [--provider auto|direct] [--quiet] [--images|--no-images]",
+      "                             [--a-rather-long-flag-name N] <url>",
       "",
       "Fetch a page.",
       "",

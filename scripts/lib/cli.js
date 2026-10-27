@@ -195,7 +195,7 @@ export function usageText(kind, { options, positional, intro = "", environment =
     if (entry.off) groups.get(group).push([entry.off, entry.offHelp]);
   }
   const sections = [...groups].map(([title, rows]) => `${title}:\n${formatRows(rows)}`);
-  const head = wrapWords(`Usage: ./scripts/${kind}.js`, [...synopsis, `<${positional.name}>`]);
+  const head = wrapWords(`Usage: node scripts/${kind}.js`, [...synopsis, `<${positional.name}>`]);
   return `${[head, intro, ...sections, environment ? `Environment:\n${environment}` : ""].filter(Boolean).join("\n\n")}\n`;
 }
 

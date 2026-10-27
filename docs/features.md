@@ -5,11 +5,11 @@
 `search.js` 只使用 Responses API：
 
 ```bash
-./scripts/search.js "Node.js 当前最新的 LTS 是哪个完整版本号？哪天发布的？"
-./scripts/search.js --instructions "只要官方 changelog 原文和日期" "Node.js 最新 LTS 的 changelog 改了什么？"
-./scripts/search.js --responses-allowed-domains github.com "有哪些给 pi coding agent 用的搜索 skill？"
-./scripts/search.js --platform GitHub "有哪些给 pi coding agent 用的搜索 skill？"
-./scripts/search.js --responses-openrouter-engine exa "latest official release notes"
+node scripts/search.js "Node.js 当前最新的 LTS 是哪个完整版本号？哪天发布的？"
+node scripts/search.js --instructions "只要官方 changelog 原文和日期" "Node.js 最新 LTS 的 changelog 改了什么？"
+node scripts/search.js --responses-allowed-domains github.com "有哪些给 pi coding agent 用的搜索 skill？"
+node scripts/search.js --platform GitHub "有哪些给 pi coding agent 用的搜索 skill？"
+node scripts/search.js --responses-openrouter-engine exa "latest official release notes"
 ```
 
 query 只发给 Grok，写成要问的问题。`--instructions` 可选，交代怎么回答，追加到 Grok 的 user message 末尾。`--responses-allowed-domains` / `--responses-excluded-domains` 作为 `filters` 传给 Grok 的 `web_search`。
@@ -25,10 +25,10 @@ query 只发给 Grok，写成要问的问题。`--instructions` 可选，交代�
 ### 检索源
 
 ```bash
-./scripts/search.js --source x "X 上怎么评价 grok-4.6"
-./scripts/search.js --source both "grok-4.6 发布后的反响"
-./scripts/search.js --source x --x-from-date 2026-08-01 "query"
-./scripts/search.js --responses-x-search "query"   # 等价 --source both
+node scripts/search.js --source x "X 上怎么评价 grok-4.6"
+node scripts/search.js --source both "grok-4.6 发布后的反响"
+node scripts/search.js --source x --x-from-date 2026-08-01 "query"
+node scripts/search.js --responses-x-search "query"   # 等价 --source both
 ```
 
 `web` / `x` / `both` 三档决定挂哪些工具。启用 X 时会追加一条 X 证据准则 system message（署名 handle + 日期、区分声称与证实、热度不等于真实性、约 4 次 X 检索预算），基础 prompt 仍是第一条以保持 cache 前缀稳定。详见 `responses-mode.md`。
@@ -49,10 +49,10 @@ Grok 的来源去重后写入 `sources.items`（默认最多 12 条，`--max-sou
 ## Fetch
 
 ```bash
-./scripts/fetch.js https://example.com
-./scripts/fetch.js --provider firecrawl https://example.com
-./scripts/fetch.js --provider direct https://example.com
-./scripts/fetch.js --offset 12000 https://example.com
+node scripts/fetch.js https://example.com
+node scripts/fetch.js --provider firecrawl https://example.com
+node scripts/fetch.js --provider direct https://example.com
+node scripts/fetch.js --offset 12000 https://example.com
 ```
 
 `auto` provider 顺序：
@@ -80,9 +80,9 @@ X 原帖在 `auto` 下不论 key 都先走 Direct（校验 handle、日期、正
 ## Map
 
 ```bash
-./scripts/map.js https://docs.example.com --limit 20
-./scripts/map.js https://docs.example.com --instructions "only API reference pages" --max-depth 2
-./scripts/map.js --provider direct https://docs.example.com --direct-timeout 10   # Direct Map 每个请求的超时，独立于 Tavily 的 --timeout
+node scripts/map.js https://docs.example.com --limit 20
+node scripts/map.js https://docs.example.com --instructions "only API reference pages" --max-depth 2
+node scripts/map.js --provider direct https://docs.example.com --direct-timeout 10   # Direct Map 每个请求的超时，独立于 Tavily 的 --timeout
 ```
 
 `auto` provider 顺序：

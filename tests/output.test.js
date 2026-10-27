@@ -29,8 +29,12 @@ assert.notEqual(first, second);
 assert.equal(await readFile(first, "utf8"), "one");
 assert.equal(await readFile(second, "utf8"), "two");
 
-assert.equal((await stat(first)).mode & 0o777, 0o600);
-assert.equal((await stat(second)).mode & 0o777, 0o600);
+// Windows has no Unix mode bits (every file reads back 0o666); the profile dir's ACL keeps it private.
+const checkMode = process.platform !== "win32";
+if (checkMode) {
+  assert.equal((await stat(first)).mode & 0o777, 0o600);
+  assert.equal((await stat(second)).mode & 0o777, 0o600);
+}
 
 // Run records: one JSON per command, named by kind, private, with the schema header.
 const base = runRecordBase("search", { grokApiKey: "" }, "2026-09-08T00:00:00.000Z");
@@ -45,7 +49,7 @@ const runPath = await writeRunRecord(config, {
   record: { ...base, query: "run record query", answer: "full answer", error: null },
 });
 assert.match(path.basename(runPath), /^grok-search-\d{8}-\d{6}-run-search-run-record-query-[0-9a-f]{6}\.json$/);
-assert.equal((await stat(runPath)).mode & 0o777, 0o600);
+if (checkMode) assert.equal((await stat(runPath)).mode & 0o777, 0o600);
 const stored = JSON.parse(await readFile(runPath, "utf8"));
 assert.equal(stored.schema_version, 3);
 assert.equal(stored.answer, "full answer");
