@@ -1,0 +1,35 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+      - run: npm ci
+      - run: npm test
+      # The commands SKILL.md tells agents to run, from PowerShell (issue #3). An argument
+      # error exits 2 before any network call, so this checks that each script starts and
+      # prints its JSON on every OS.
+      - name: Run the documented commands from PowerShell
+        shell: pwsh
+        run: |
+          foreach ($script in 'search', 'fetch', 'map') {
+            $out = node "scripts/$script.js" --no-such-flag 2>$null
+            if ($LASTEXITCODE -ne 2) { throw "$script.js exited $LASTEXITCODE, expected 2" }
+            $json = ($out -join "`n") | ConvertFrom-Json
+            if ($json.error.code -ne 'ARGUMENT_ERROR') { throw "$script.js printed: $out" }
+          }
+          exit 0
