@@ -13,10 +13,10 @@ X search bills $5 per 1k calls, the same as web search. `diagnostics.responses_x
 ## Filters
 
 ```bash
-{baseDir}/scripts/search.js --source x "what is X saying about the outage"
-{baseDir}/scripts/search.js --source both "reaction to the release"
-{baseDir}/scripts/search.js --source x --responses-allowed-x-handles xai,OpenAI "the question"
-{baseDir}/scripts/search.js --source x --x-from-date 2026-08-01 --x-to-date 2026-08-16 "the question"
+node {baseDir}/scripts/search.js --source x "what is X saying about the outage"
+node {baseDir}/scripts/search.js --source both "reaction to the release"
+node {baseDir}/scripts/search.js --source x --responses-allowed-x-handles xai,OpenAI "the question"
+node {baseDir}/scripts/search.js --source x --x-from-date 2026-08-01 --x-to-date 2026-08-16 "the question"
 ```
 
 - `--responses-allowed-x-handles` and `--responses-excluded-x-handles` are mutually exclusive, max 20 each, and either one implies X search.
@@ -43,7 +43,7 @@ Firecrawl bills an X post at about 30 credits (an ordinary page is 1). The keyle
 
 - `--provider auto` with a URL that has both handle and post id: Direct runs first, whatever keys are configured, and succeeds only when the page names the handle (after X's redirect to the canonical handle), carries a date, and has non-boilerplate text. The result is the main post only. If validation fails, Tavily runs and then Firecrawl (X pages keep Tavily first: Firecrawl bills about 30 credits for one); if that is unavailable too, the Direct text is returned with a warning.
 - Why Direct first even with keys (2026-09-08 side-by-side): Tavily is fast and free but returned one of three posts without any date and timed out on another; Firecrawl gives ISO timestamps, engagement counts and the thread, at about 30 credits and 10 seconds or more per post.
-- Need the thread or replies: `{baseDir}/scripts/fetch.js --provider firecrawl <post-url>`, deliberately, once. A `credits_used >= 10` fetch adds a warning stating the cost.
+- Need the thread or replies: `node {baseDir}/scripts/fetch.js --provider firecrawl <post-url>`, deliberately, once. A `credits_used >= 10` fetch adds a warning stating the cost.
 - `/i/status/<id>` and `/i/web/status/<id>` URLs carry no handle and cannot be validated; they use the normal order.
 
 When citing a post as decisive evidence, record its date, the model version, the client, and the login method the author used. Most contradictions between posts dissolve once those four are separated.

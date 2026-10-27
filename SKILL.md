@@ -19,12 +19,12 @@ Run the fewest commands that answer the question; run independent sub-questions 
 ## Commands
 
 ```bash
-{baseDir}/scripts/search.js "the question, with what to return"
-{baseDir}/scripts/search.js --instructions "format, language, what to leave out" "the question"
-{baseDir}/scripts/search.js --responses-allowed-domains github.com "the question"
-{baseDir}/scripts/search.js --source x --x-from-date 2026-07-01 "what people say about ..."
-{baseDir}/scripts/fetch.js https://example.com        # a cut page ends with the --offset to continue from
-{baseDir}/scripts/map.js https://docs.example.com --limit 20
+node {baseDir}/scripts/search.js "the question, with what to return"
+node {baseDir}/scripts/search.js --instructions "format, language, what to leave out" "the question"
+node {baseDir}/scripts/search.js --responses-allowed-domains github.com "the question"
+node {baseDir}/scripts/search.js --source x --x-from-date 2026-07-01 "what people say about ..."
+node {baseDir}/scripts/fetch.js https://example.com        # a cut page ends with the --offset to continue from
+node {baseDir}/scripts/map.js https://docs.example.com --limit 20
 ```
 
 Query rules:

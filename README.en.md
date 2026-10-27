@@ -12,6 +12,7 @@
 
 - Node.js `>=18.17`
 - Run `npm install` once to install the `undici` transport dependency
+- Run the scripts with `node`, so the same commands work on macOS, Linux, and Windows (PowerShell, cmd)
 - `GROK_API_URL` and `GROK_API_KEY` for `search.js`
 
 ## Quick Start
@@ -20,21 +21,21 @@ Install dependencies once, then run scripts from the project root:
 
 ```bash
 npm install
-./scripts/search.js "latest Node.js LTS"
-./scripts/fetch.js https://example.com
-./scripts/map.js https://docs.example.com --limit 20
+node scripts/search.js "latest Node.js LTS"
+node scripts/fetch.js https://example.com
+node scripts/map.js https://docs.example.com --limit 20
 ```
 
 ## Use With pi (Example)
 
 Clone or copy this directory into your pi skills location, then enable the skill through `SKILL.md`.
 
-The commands are still direct script invocations:
+The commands are the same as above:
 
 ```bash
-./scripts/search.js "latest Node.js LTS"
-./scripts/fetch.js https://example.com
-./scripts/map.js https://docs.example.com --limit 20
+node scripts/search.js "latest Node.js LTS"
+node scripts/fetch.js https://example.com
+node scripts/map.js https://docs.example.com --limit 20
 ```
 
 Other agent harnesses can use the same pattern: read `SKILL.md`, then run `scripts/search.js`, `scripts/fetch.js`, or `scripts/map.js` when needed.
@@ -63,6 +64,13 @@ Copy the example config first:
 mkdir -p ~/.config/grok-search
 cp config.example.json ~/.config/grok-search/config.json
 chmod 600 ~/.config/grok-search/config.json
+```
+
+On Windows the file lives at `%USERPROFILE%\.config\grok-search\config.json`. In PowerShell:
+
+```powershell
+New-Item -ItemType Directory -Force "$HOME\.config\grok-search" | Out-Null
+Copy-Item config.example.json "$HOME\.config\grok-search\config.json"
 ```
 
 Full configuration example:
@@ -214,16 +222,16 @@ On success, provider attempts, warnings, timestamps, and command options live un
 ## Search
 
 ```bash
-./scripts/search.js "What changed in the latest Node.js LTS?"
-./scripts/search.js --instructions "Quote the official changelog with dates; say so if not found" "What changed in the latest Node.js LTS changelog?"
-./scripts/search.js --platform GitHub "Which search skills exist for the pi coding agent?"
-./scripts/search.js --responses-allowed-domains github.com "Which search skills exist for the pi coding agent?"
-./scripts/search.js --source-chars 200 "query"
-./scripts/search.js --max-sources 8 "query"
-./scripts/search.js --deadline 120 "query"
-./scripts/search.js --full-sources "debug provider raw"
-./scripts/search.js --responses-openrouter-engine exa "strict web-only query"
-./scripts/search.js --source x --responses-parallel-tool-calls false "query"   # one tool call per turn, cheaper
+node scripts/search.js "What changed in the latest Node.js LTS?"
+node scripts/search.js --instructions "Quote the official changelog with dates; say so if not found" "What changed in the latest Node.js LTS changelog?"
+node scripts/search.js --platform GitHub "Which search skills exist for the pi coding agent?"
+node scripts/search.js --responses-allowed-domains github.com "Which search skills exist for the pi coding agent?"
+node scripts/search.js --source-chars 200 "query"
+node scripts/search.js --max-sources 8 "query"
+node scripts/search.js --deadline 120 "query"
+node scripts/search.js --full-sources "debug provider raw"
+node scripts/search.js --responses-openrouter-engine exa "strict web-only query"
+node scripts/search.js --source x --responses-parallel-tool-calls false "query"   # one tool call per turn, cheaper
 ```
 
 Only Grok reads the query, so write it as the question you want answered, with the fields you need. In a side-by-side on 2026-10-19 (`benchmarks/supplement-compare.mjs`), a full question and "short keywords plus `--instructions`" both got all 13 current-fact questions right and split the 6 research questions; the full question cost slightly less.
@@ -237,11 +245,11 @@ Only Grok reads the query, so write it as the question you want answered, with t
 `--source` selects which Grok server-side tools are attached. The default is `web`:
 
 ```bash
-./scripts/search.js --source x "what is X saying about grok-4.6"   # X only
-./scripts/search.js --source both "reaction to the grok-4.6 release" # Grok routes
-./scripts/search.js --source x --responses-allowed-x-handles xai,OpenAI "query"
-./scripts/search.js --source x --x-from-date 2026-08-01 --x-to-date 2026-08-16 "query"
-./scripts/search.js --source x --x-images "query"                  # analyze post images
+node scripts/search.js --source x "what is X saying about grok-4.6"   # X only
+node scripts/search.js --source both "reaction to the grok-4.6 release" # Grok routes
+node scripts/search.js --source x --responses-allowed-x-handles xai,OpenAI "query"
+node scripts/search.js --source x --x-from-date 2026-08-01 --x-to-date 2026-08-16 "query"
+node scripts/search.js --source x --x-images "query"                  # analyze post images
 ```
 
 - `x_search` supports handle allow/deny lists (mutually exclusive, max 20 each), `--x-from-date` / `--x-to-date` (`YYYY-MM-DD`), and `--x-images` / `--x-videos` (off by default, billed as extra tokens; `--no-x-images` / `--no-x-videos` turn off what the config enabled). When a search with a date window or a handle list read no posts at all (`usage.server_side_tool_usage_details.x_posts_fetched` is 0), `diagnostics.warnings` names the filter and suggests widening it; an account that posted nothing in the window gives an empty result, not a failed search.
@@ -291,14 +299,14 @@ Source cards intentionally do not include long `description` or `content` fields
 ## Fetch
 
 ```bash
-./scripts/fetch.js https://example.com
-./scripts/fetch.js --provider direct https://example.com
+node scripts/fetch.js https://example.com
+node scripts/fetch.js --provider direct https://example.com
 ```
 
 Default fetch output is a 12,000-character preview (`--max-chars` changes it). When the text is cut, the last line of `content.text` is a `[grok-search]` notice saying which characters are shown, which `--offset` gives the next part, and which file has the full text. To read on, continue with `--offset` rather than raising `--max-chars` and printing the start again. Whatever `--max-chars` says, the whole JSON output stays under 45KB (pi's bash tool keeps only the last 50KB of output, so an oversized one-line text would be dropped whole): when the text does not fit, `content.text` is cut further, `content.truncated` is true, and the full text is in `content.full_path`. Search `answer.text` works the same way; a cut answer ends with a line naming the full file.
 
 ```bash
-./scripts/fetch.js --offset 12000 https://example.com
+node scripts/fetch.js --offset 12000 https://example.com
 ```
 
 Fetching the same URL again within 15 minutes reads a local cache (`<stateDir>/fetch-cache/`) instead of calling a provider, after Claude Code WebFetch's 15-minute cache. `auto` reuses only what an earlier `auto` fetch returned; an explicit provider reuses results that provider produced, so switching provider still asks the new one. A hit sets `diagnostics.cache` to `{ hit, fetched_at, age_seconds }` and leaves `provider_attempts` empty. Failures are not cached, and neither are fallbacks (a result obtained after Firecrawl or Tavily failed, or the Direct text used after both did), since the failure may be over by the next call; `--no-cache` fetches anew. The hint on a cut text says how many minutes the cached copy has left, and a continuation reuses the full-text file the first run wrote. `--offset` on a new fetch (the cache expired, or `--no-cache`) opens the text with a line saying the offset may not line up with the earlier copy. The reason: in the sessions up to 2026-10-09, 12 of the 109 URLs fetched in a session were fetched again within about three minutes, because the agent filtered the same page with another script or wanted to see past the preview.
@@ -338,9 +346,9 @@ Successful fetch output uses `content.text`, `content.offset`, `content.chars` (
 ## Map
 
 ```bash
-./scripts/map.js https://docs.example.com --limit 20
-./scripts/map.js --provider direct https://docs.example.com
-./scripts/map.js https://docs.example.com --instructions "only API reference pages" --max-depth 2
+node scripts/map.js https://docs.example.com --limit 20
+node scripts/map.js --provider direct https://docs.example.com
+node scripts/map.js https://docs.example.com --instructions "only API reference pages" --max-depth 2
 ```
 
 Provider order for `--provider auto`:
@@ -381,8 +389,8 @@ Read these paths only when the preview is not enough:
 No key required:
 
 ```bash
-./scripts/fetch.js --provider direct https://example.com
-./scripts/map.js --provider direct https://example.com --limit 5
+node scripts/fetch.js --provider direct https://example.com
+node scripts/map.js --provider direct https://example.com --limit 5
 npm test
 node tests/argv.test.js
 ```
@@ -392,7 +400,7 @@ Search requires Grok configuration:
 ```bash
 export GROK_API_URL="https://your-openai-compatible-endpoint/v1"
 export GROK_API_KEY="your-key"
-./scripts/search.js "What changed in the latest Node.js LTS?"
+node scripts/search.js "What changed in the latest Node.js LTS?"
 ```
 
 ## Common Errors
